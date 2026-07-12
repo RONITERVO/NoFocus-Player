@@ -1,7 +1,10 @@
 package dev.nofocus.folderplayer;
 
 import android.Manifest;
+import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -21,11 +24,13 @@ import android.provider.DocumentsContract;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
 import android.widget.CompoundButton;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.SeekBar;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -34,7 +39,8 @@ import java.util.concurrent.Executors;
 
 public class MainActivity extends Activity {
     private static final int REQUEST_TREE = 1001;
-    private static final int REQUEST_NOTIFICATIONS = 1002;
+    private static final int REQUEST_NETWORK = 1003;
+    private static final String ACCESS_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK";
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService extractionExecutor = Executors.newSingleThreadExecutor();
@@ -49,13 +55,29 @@ public class MainActivity extends Activity {
     private Button extractButton;
     private CheckBox shuffleCheck;
     private SeekBar volumeSeek;
+    private TextView wifiStatusView;
+    private TextView wifiEndpointView;
+    private TextView wifiCodeView;
+    private SeekBar wifiVolumeSeek;
+    private Spinner latencySpinner;
+    private Button wifiStartButton;
     private boolean receiverRegistered = false;
     private boolean extractionRunning = false;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
         @Override
         public void onReceive(Context context, Intent intent) {
-            if (intent == null || !PlayerService.ACTION_STATE.equals(intent.getAction())) {
+            if (intent == null) {
+                return;
+            }
+            if (WifiStreamService.ACTION_STATE.equals(intent.getAction())) {
+                String wifiStatus = intent.getStringExtra(WifiStreamService.EXTRA_STATUS);
+                boolean connected = intent.getBooleanExtra(WifiStreamService.EXTRA_CONNECTED, false);
+                wifiStatusView.setText(nonEmpty(wifiStatus, "Stopped"));
+                wifiStartButton.setText(connected ? "Receiver running" : "Start Wi-Fi receiver");
+                return;
+            }
+            if (!PlayerService.ACTION_STATE.equals(intent.getAction())) {
                 return;
             }
             String state = intent.getStringExtra(PlayerService.EXTRA_STATE);
@@ -79,15 +101,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         prefs = getSharedPreferences(PlayerService.PREFS, MODE_PRIVATE);
+        ensurePairingCode();
         requestNotificationPermissionIfNeeded();
         buildUi();
         updateFolderText();
     }
 
     @Override
+    @SuppressLint("UnspecifiedRegisterReceiverFlag")
     protected void onResume() {
         super.onResume();
         IntentFilter filter = new IntentFilter(PlayerService.ACTION_STATE);
+        filter.addAction(WifiStreamService.ACTION_STATE);
         if (Build.VERSION.SDK_INT >= 33) {
             registerReceiver(stateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
@@ -95,6 +120,9 @@ public class MainActivity extends Activity {
         }
         receiverRegistered = true;
         updateFolderText();
+        if (wifiEndpointView != null) {
+            wifiEndpointView.setText("Phone: " + NetworkAddress.localIpv4() + ":" + WifiAudioProtocol.PORT);
+        }
     }
 
     @Override
@@ -146,6 +174,93 @@ public class MainActivity extends Activity {
         explanation.setLineSpacing(dp(4), 1f);
         explanation.setPadding(0, 0, 0, dp(24));
         root.addView(explanation, fullWidth());
+
+        LinearLayout wifiCard = createCard(root);
+        wifiCard.addView(createSectionLabel("WI-FI SPEAKER"));
+
+        TextView wifiExplanation = new TextView(this);
+        wifiExplanation.setText("Stream lossless system audio from a computer over your local network. Encrypted, low latency, and no audio focus.");
+        wifiExplanation.setTextSize(14);
+        wifiExplanation.setTextColor(Color.parseColor("#555555"));
+        wifiExplanation.setPadding(0, dp(8), 0, dp(12));
+        wifiCard.addView(wifiExplanation, fullWidth());
+
+        wifiStatusView = new TextView(this);
+        wifiStatusView.setText("Stopped");
+        wifiStatusView.setTextSize(16);
+        wifiStatusView.setTextColor(Color.parseColor("#222222"));
+        wifiStatusView.setPadding(0, 0, 0, dp(12));
+        wifiCard.addView(wifiStatusView, fullWidth());
+
+        wifiEndpointView = new TextView(this);
+        wifiEndpointView.setText("Phone: " + NetworkAddress.localIpv4() + ":" + WifiAudioProtocol.PORT);
+        wifiEndpointView.setTextSize(14);
+        wifiEndpointView.setTextColor(Color.parseColor("#555555"));
+        wifiCard.addView(wifiEndpointView, fullWidth());
+
+        wifiCodeView = new TextView(this);
+        wifiCodeView.setText("Pairing code: " + PairingCode.display(currentPairingCode()));
+        wifiCodeView.setTextSize(16);
+        wifiCodeView.setTypeface(Typeface.MONOSPACE);
+        wifiCodeView.setTextColor(Color.parseColor("#111111"));
+        wifiCodeView.setPadding(0, dp(8), 0, dp(8));
+        wifiCard.addView(wifiCodeView, fullWidth());
+
+        LinearLayout codeControls = new LinearLayout(this);
+        codeControls.setOrientation(LinearLayout.HORIZONTAL);
+        wifiCard.addView(codeControls, fullWidth());
+        codeControls.addView(createButton("Copy setup", v -> copyWifiSetup()), weighted());
+        codeControls.addView(new View(this), new LinearLayout.LayoutParams(dp(8), 1));
+        codeControls.addView(createButton("Rotate code", v -> rotatePairingCode()), weighted());
+
+        TextView latencyLabel = new TextView(this);
+        latencyLabel.setText("Network jitter buffer");
+        latencyLabel.setTextSize(12);
+        latencyLabel.setTextColor(Color.parseColor("#888888"));
+        latencyLabel.setPadding(0, dp(16), 0, dp(4));
+        wifiCard.addView(latencyLabel, fullWidth());
+
+        latencySpinner = new Spinner(this);
+        String[] profiles = new String[]{"Ultra-low · 10 ms", "Low · 20 ms", "Reliable · 40 ms"};
+        ArrayAdapter<String> latencyAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, profiles);
+        latencyAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        latencySpinner.setAdapter(latencyAdapter);
+        int savedPackets = prefs.getInt(WifiStreamService.PREF_LATENCY_PACKETS, 4);
+        latencySpinner.setSelection(savedPackets <= 2 ? 0 : savedPackets >= 8 ? 2 : 1);
+        wifiCard.addView(latencySpinner, fullWidth());
+
+        TextView wifiVolumeLabel = new TextView(this);
+        wifiVolumeLabel.setText("Wi-Fi stream volume");
+        wifiVolumeLabel.setTextSize(12);
+        wifiVolumeLabel.setTextColor(Color.parseColor("#888888"));
+        wifiVolumeLabel.setPadding(0, dp(12), 0, 0);
+        wifiCard.addView(wifiVolumeLabel, fullWidth());
+
+        wifiVolumeSeek = new SeekBar(this);
+        wifiVolumeSeek.setMax(100);
+        wifiVolumeSeek.setProgress(Math.round(prefs.getFloat(WifiStreamService.PREF_STREAM_VOLUME, 1f) * 100f));
+        wifiVolumeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
+                if (fromUser) {
+                    prefs.edit().putFloat(WifiStreamService.PREF_STREAM_VOLUME, progress / 100f).apply();
+                }
+            }
+            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
+            @Override public void onStopTrackingTouch(SeekBar seekBar) {
+                startWifiAction(WifiStreamService.ACTION_SET_VOLUME);
+            }
+        });
+        wifiCard.addView(wifiVolumeSeek, fullWidth());
+
+        wifiStartButton = createButton("Start Wi-Fi receiver", v -> {
+            int selection = latencySpinner.getSelectedItemPosition();
+            prefs.edit().putInt(WifiStreamService.PREF_LATENCY_PACKETS,
+                    selection == 0 ? 2 : selection == 2 ? 8 : 4).apply();
+            stopFolderPlayback();
+            startWifiAction(WifiStreamService.ACTION_START);
+        });
+        wifiCard.addView(wifiStartButton);
+        wifiCard.addView(createButton("Stop Wi-Fi receiver", v -> startWifiAction(WifiStreamService.ACTION_STOP)));
 
         LinearLayout sourceCard = createCard(root);
         sourceCard.addView(createSectionLabel("MUSIC SOURCE"));
@@ -489,6 +604,12 @@ public class MainActivity extends Activity {
     }
 
     private void startPlayerAction(String action) {
+        if (PlayerService.ACTION_PLAY.equals(action)) {
+            stopService(new Intent(this, WifiStreamService.class));
+            if (wifiStatusView != null) {
+                wifiStatusView.setText("Stopped");
+            }
+        }
         Intent intent = new Intent(this, PlayerService.class);
         intent.setAction(action);
         String tree = prefs.getString(PlayerService.PREF_TREE_URI, null);
@@ -506,6 +627,71 @@ public class MainActivity extends Activity {
             startForegroundService(intent);
         } else {
             startService(intent);
+        }
+    }
+
+    private void startWifiAction(String action) {
+        if (WifiStreamService.ACTION_STOP.equals(action)) {
+            stopService(new Intent(this, WifiStreamService.class));
+            if (wifiStatusView != null) {
+                wifiStatusView.setText("Stopped");
+            }
+            if (wifiStartButton != null) {
+                wifiStartButton.setText("Start Wi-Fi receiver");
+            }
+            return;
+        }
+        if (WifiStreamService.ACTION_START.equals(action) && !hasLocalNetworkPermission()) {
+            requestNetworkPermissionIfNeeded();
+            toast("Allow nearby/local network access, then start the receiver again.");
+            return;
+        }
+        Intent intent = new Intent(this, WifiStreamService.class).setAction(action);
+        if (wifiVolumeSeek != null) {
+            intent.putExtra("volume", wifiVolumeSeek.getProgress() / 100f);
+        }
+        if (WifiStreamService.ACTION_START.equals(action) && Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+    }
+
+    private void stopFolderPlayback() {
+        stopService(new Intent(this, PlayerService.class));
+        if (statusView != null) {
+            statusView.setText("Stopped");
+        }
+        if (playPauseButton != null) {
+            playPauseButton.setText("Play");
+        }
+    }
+
+    private void ensurePairingCode() {
+        if (prefs.getString(WifiStreamService.PREF_PAIRING_CODE, null) == null) {
+            prefs.edit().putString(WifiStreamService.PREF_PAIRING_CODE, PairingCode.generate()).apply();
+        }
+    }
+
+    private String currentPairingCode() {
+        return prefs.getString(WifiStreamService.PREF_PAIRING_CODE, "");
+    }
+
+    private void rotatePairingCode() {
+        startWifiAction(WifiStreamService.ACTION_STOP);
+        String code = PairingCode.generate();
+        prefs.edit().putString(WifiStreamService.PREF_PAIRING_CODE, code).apply();
+        wifiCodeView.setText("Pairing code: " + PairingCode.display(code));
+        toast("Pairing code rotated. Update the sender command.");
+    }
+
+    private void copyWifiSetup() {
+        String setup = "python nofocus_sender.py --host " + NetworkAddress.localIpv4()
+                + " --code " + PairingCode.display(currentPairingCode());
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText("NoFocus sender setup", setup));
+            toast("Sender command copied.");
         }
     }
 
@@ -543,9 +729,30 @@ public class MainActivity extends Activity {
     }
 
     private void requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NETWORK);
         }
+    }
+
+    private void requestNetworkPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT < 36) {
+            return;
+        }
+        String networkPermission = Build.VERSION.SDK_INT >= 37
+                ? ACCESS_LOCAL_NETWORK : Manifest.permission.NEARBY_WIFI_DEVICES;
+        if (checkSelfPermission(networkPermission) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{networkPermission}, REQUEST_NETWORK);
+        }
+    }
+
+    private boolean hasLocalNetworkPermission() {
+        if (Build.VERSION.SDK_INT < 36) {
+            return true;
+        }
+        String permission = Build.VERSION.SDK_INT >= 37
+                ? ACCESS_LOCAL_NETWORK : Manifest.permission.NEARBY_WIFI_DEVICES;
+        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
     }
 
     private LinearLayout.LayoutParams fullWidth() {

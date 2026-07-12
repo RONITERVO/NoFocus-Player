@@ -110,6 +110,7 @@ public class PlayerService extends Service {
         ensureForeground(status);
 
         if (ACTION_PLAY.equals(action)) {
+            stopService(new Intent(this, WifiStreamService.class));
             String tree = intent.getStringExtra(EXTRA_TREE_URI);
             if (tree == null) {
                 tree = prefs.getString(PREF_TREE_URI, null);

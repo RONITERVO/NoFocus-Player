@@ -184,7 +184,10 @@ public final class VideoAudioExtractor {
                     break;
                 }
 
-                bufferInfo.set(0, sampleSize, extractor.getSampleTime(), extractor.getSampleFlags());
+                int extractorFlags = extractor.getSampleFlags();
+                int codecFlags = (extractorFlags & MediaExtractor.SAMPLE_FLAG_SYNC) != 0
+                        ? MediaCodec.BUFFER_FLAG_KEY_FRAME : 0;
+                bufferInfo.set(0, sampleSize, extractor.getSampleTime(), codecFlags);
                 muxer.writeSampleData(muxerTrack, buffer, bufferInfo);
                 wroteSample = true;
                 extractor.advance();
