@@ -28,6 +28,10 @@ final class WifiAudioProtocol {
     private static final byte VERSION = 2;
     private static final byte TYPE_HELLO = 1;
     private static final byte TYPE_AUDIO = 2;
+    private static final byte[] DISCOVERY_REQUEST = new byte[]{'N', 'F', 'P', 'D', VERSION, 1, 0, 8};
+    private static final byte[] DISCOVERY_RESPONSE = new byte[]{
+            'N', 'F', 'P', 'R', VERSION, 2, (byte) (PORT >>> 8), (byte) PORT
+    };
 
     private WifiAudioProtocol() {
     }
@@ -95,6 +99,26 @@ final class WifiAudioProtocol {
         cipher.updateAAD(packet, 0, AUDIO_HEADER_SIZE);
         byte[] pcm = cipher.doFinal(packet, AUDIO_HEADER_SIZE, encryptedLength);
         return new AudioPacket(sessionId, sequence, timestampFrames, frameCount, pcm);
+    }
+
+    static boolean isDiscoveryRequest(byte[] packet, int length) {
+        if (packet == null || length != DISCOVERY_REQUEST.length) {
+            return false;
+        }
+        return MessageDigest.isEqual(DISCOVERY_REQUEST, Arrays.copyOf(packet, length));
+    }
+
+    static byte[] discoveryResponse() {
+        return Arrays.copyOf(DISCOVERY_RESPONSE, DISCOVERY_RESPONSE.length);
+    }
+
+    static byte[] helloAcknowledgement(long sessionId, byte[] key) throws GeneralSecurityException {
+        byte[] acknowledgement = new byte[32];
+        ByteBuffer header = ByteBuffer.wrap(acknowledgement).order(ByteOrder.BIG_ENDIAN);
+        header.putInt(MAGIC).put(VERSION).put((byte) 3).putShort((short) 32).putLong(sessionId);
+        byte[] authentication = hmac(key, acknowledgement, 0, 16);
+        System.arraycopy(authentication, 0, acknowledgement, 16, 16);
+        return acknowledgement;
     }
 
     private static boolean hasPrefix(byte[] packet, int length, byte type, int headerSize) {

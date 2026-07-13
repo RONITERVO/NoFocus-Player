@@ -1,0 +1,56 @@
+name: Build release files
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      - name: Validate and build Android app
+        shell: pwsh
+        run: .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
+
+      - name: Validate desktop protocol
+        shell: pwsh
+        run: dotnet run --project desktop\windows\NoFocus.Desktop\NoFocus.Desktop.csproj -c Release -- --self-test
+
+      - name: Build one-click Windows app
+        shell: pwsh
+        run: .\desktop\windows\build-release.ps1
+
+      - name: Collect release files
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force artifacts\release | Out-Null
+          Copy-Item "artifacts\windows-x64\NoFocus Speaker.exe" "artifacts\release\NoFocus-Speaker-Windows-x64.exe"
+          Copy-Item "app\build\outputs\apk\debug\app-debug.apk" "artifacts\release\NoFocus-Player-Android-debug.apk"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: NoFocus-release-files
+          path: artifacts/release/*
+
+      - name: Attach files to tagged GitHub release
+        if: startsWith(github.ref, 'refs/tags/')
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "${{ github.ref_name }}" artifacts\release\* --generate-notes --title "NoFocus ${{ github.ref_name }}"

@@ -56,6 +56,28 @@ public class WifiAudioProtocolTest {
         }
     }
 
+    @Test
+    public void recognizesFixedSizeDiscoveryAndAdvertisesPort() {
+        byte[] request = new byte[]{'N', 'F', 'P', 'D', 2, 1, 0, 8};
+        assertTrue(WifiAudioProtocol.isDiscoveryRequest(request, request.length));
+        request[0] = 'X';
+        assertFalse(WifiAudioProtocol.isDiscoveryRequest(request, request.length));
+        byte[] response = WifiAudioProtocol.discoveryResponse();
+        assertArrayEquals(new byte[]{'N', 'F', 'P', 'R', 2, 2, (byte) 0x9b, (byte) 0x8d}, response);
+    }
+
+    @Test
+    public void helloAcknowledgementIsFixedSizeAndAuthenticated() throws Exception {
+        byte[] key = WifiAudioProtocol.keyFromPairingCode(CODE);
+        byte[] acknowledgement = WifiAudioProtocol.helloAcknowledgement(42L, key);
+        assertEquals(32, acknowledgement.length);
+        assertArrayEquals(new byte[]{'N', 'F', 'P', '2', 2, 3, 0, 32},
+                Arrays.copyOf(acknowledgement, 8));
+        acknowledgement[10] ^= 1;
+        assertFalse(Arrays.equals(acknowledgement,
+                WifiAudioProtocol.helloAcknowledgement(42L, key)));
+    }
+
     private static byte[] hello(byte[] key, long session, String name) throws Exception {
         ByteBuffer body = ByteBuffer.allocate(48).order(ByteOrder.BIG_ENDIAN);
         body.putInt(0x4e465032).put((byte) 2).put((byte) 1).putShort((short) 64);

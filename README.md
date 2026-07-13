@@ -1,79 +1,92 @@
 # NoFocus Player
 
-NoFocus Player has two deliberately audio-focus-free playback modes:
+NoFocus Player lets an Android phone play either a local music folder or encrypted PC audio without requesting audio focus. YouTube, games, and other apps can therefore keep playing at the same time.
 
-- recursively play audio from a phone folder; and
-- use the phone as an encrypted, low-latency Wi-Fi speaker for a computer.
+## Easy Wi-Fi speaker setup
 
-Because neither mode calls `AudioManager.requestAudioFocus()`, Android can mix it with YouTube or another media app. Phone calls, Bluetooth/Android Auto policies, manufacturer audio enhancements, or other route-specific policies can still override mixing.
+Requirements: Windows 10/11, Android 6 or newer, and both devices on the same home network. A strong 5 GHz or 6 GHz connection is recommended.
 
-## Wi-Fi speaker quick start
+1. Install and open **NoFocus Player** on the phone.
+2. Tap **Start Wi-Fi receiver**.
+3. Download and open **NoFocus-Speaker-Windows-x64.exe** on the PC. It is self-contained; Python and .NET do not need to be installed.
+4. The PC normally finds the phone automatically. Enter the pairing code shown on the phone once, then click **Start listening on phone**.
 
-The computer and phone must be on the same LAN. A 5 GHz or 6 GHz Wi-Fi connection with a strong signal is recommended.
+The PC remembers its setup and protects the pairing code with the current Windows account. On later launches, streaming is one click. If automatic discovery is blocked by a router or VPN, enter the phone address shown in the app. **Copy PC setup** and **Paste phone setup** provide another easy setup route when clipboard sync is enabled.
 
-1. On the phone, open **NoFocus Player** and tap **Start Wi-Fi receiver**.
-2. Note the phone address and pairing code shown in the Wi-Fi Speaker card.
-3. On the computer, install Python 3.9 or newer and run:
+The sender captures the default PC output, never the microphone. Changing the Windows default output device while streaming may require pressing Stop and Start once.
 
-   ```powershell
-   cd desktop_sender
-   python -m venv .venv
-   .venv\Scripts\python -m pip install -r requirements.txt
-   .venv\Scripts\python nofocus_sender.py --host 192.168.1.50 --code ABCD-EFGH-JKLM-NPQR
-   ```
+## Performance
 
-   On macOS/Linux, activate the environment with `source .venv/bin/activate`, then use `python nofocus_sender.py ...`.
+The native Windows sender uses:
 
-4. Play audio on the computer. The sender captures the default output loopback, not the microphone.
+- event-driven WASAPI system-output capture;
+- a bounded 80 ms capture buffer that discards stale audio rather than growing latency;
+- an MMCSS `Pro Audio` sender thread;
+- absolute 5 ms high-resolution deadlines, avoiding cumulative timer drift;
+- AES-GCM accelerated by the PC runtime; and
+- one-packet time diversity, recovering an isolated Wi-Fi loss without a round trip.
 
-Use `python nofocus_sender.py --list-devices` and `--device "name substring"` when the wrong output is selected. Windows WASAPI loopback and Linux PulseAudio/PipeWire-Pulse monitors work directly. macOS may require a system-audio loopback device such as BlackHole, depending on the CoreAudio configuration.
+On the tested 32-logical-core Windows PC, the native app used roughly 35-39 MB working memory and 0.1-0.3 CPU-seconds per 25 seconds. With all logical processors deliberately saturated, it still sent 5,002 primary packets in 25 seconds and the phone reported zero gaps.
 
-### Latency and quality
+## Latency and quality
 
-The stream is lossless 48 kHz, stereo, signed 16-bit PCM. Each encrypted UDP packet contains 5 ms of audio and remains below the usual LAN MTU. The sender repeats the preceding frame on the next tick, allowing recovery from one lost Wi-Fi datagram without a round trip; total traffic remains below 3.2 Mbit/s. The app offers 10, 20, and 40 ms network jitter targets. It also requests Android's low-latency output path and starts with a 10 ms `AudioTrack` buffer, expanding that buffer only when Android reports underruns.
+Audio is lossless 48 kHz stereo signed 16-bit PCM. Each encrypted packet contains 5 ms and remains below a normal LAN MTU. Redundancy keeps total traffic below 3.2 Mbit/s.
 
-Literal zero latency is physically impossible. Total latency also includes the computer capture backend, Wi-Fi scheduling, Android's mixer, and the phone DAC. The **Ultra-low · 10 ms** profile minimizes buffering but needs an excellent LAN; **Low · 20 ms** is the recommended starting point.
+The phone offers three profiles:
 
-On the tested Honor 400 Pro running Android 16, Ultra held a 5–15 ms network queue with zero unrecovered gaps while Android reported 23–31 ms for its fast output track. Other phones, routes, and audio enhancements will differ. Describe the feature as low latency—not zero latency—unless end-to-end acoustic measurements on the target device prove otherwise.
+- **Ultra-low - 10 ms:** lowest network buffering; best Wi-Fi required.
+- **Low - 20 ms:** recommended default.
+- **Reliable - 40 ms:** for congested or weaker networks.
 
-### Security model
+Literal zero latency is physically impossible. PC capture, Wi-Fi scheduling, Android's mixer, and the DAC all add time. On an Honor 400 Pro running Android 16, Ultra held a 5-15 ms network queue with zero gaps while Android reported 23-31 ms for its fast output track. Describe this feature as **low latency**, not zero latency, unless an acoustic measurement on the target hardware proves otherwise.
 
-- A random 80-bit pairing secret is generated on the phone and can be rotated at any time.
-- Hello packets are authenticated with HMAC-SHA-256.
-- Every PCM packet is encrypted and authenticated with AES-256-GCM using a random 64-bit session ID and monotonic packet sequence.
-- The receiver locks an active session to one source address, rejects old/duplicate sequence numbers, bounds all packet and queue sizes, and times out dead sessions.
-- The pairing secret is excluded from Android backup. Treat it like a local-network password and rotate it after sharing or using an untrusted LAN.
+## Privacy and security
 
-Audio is never uploaded to a cloud service. The only network traffic is direct UDP from the computer to the phone on port `39821`.
+- A random 80-bit pairing secret is generated on the phone and can be rotated.
+- Windows stores the remembered secret with DPAPI for the current Windows account.
+- Hello packets use HMAC-SHA-256 authentication.
+- Every PCM packet is encrypted and authenticated with AES-256-GCM.
+- Sessions use a random 64-bit ID and monotonic packet sequence.
+- The phone locks an active session to one source, rejects replayed/duplicate frames, bounds all buffers, and times out dead sessions.
+- Discovery exchanges only an eight-byte service marker and port. It never exposes the pairing secret.
+- The pairing secret is excluded from Android backup.
+
+Audio is sent directly over the local network on UDP port `39821`; there is no cloud service or telemetry.
 
 ## Folder player
 
 1. Tap **Choose music folder** and select `Music` or one of its subfolders.
-2. Optionally use **Extract video audio**. The extractor copies a supported source audio track into an audio-only container without lossy re-encoding.
+2. Optionally use **Extract video audio**. The extractor copies supported source audio into an audio-only container without lossy re-encoding.
 3. Tap **Start / rescan folder**, then open YouTube or another app.
 
-Android 11 and newer may prevent selecting the storage root or `Download` directly. The scanner supports common formats including MP3, M4A, AAC, FLAC, Ogg/Opus, WebM, WAV, 3GP, AMR, and MIDI.
+Android 11 and newer may prevent selecting the storage root or `Download` directly. Common MP3, M4A, AAC, FLAC, Ogg/Opus, WebM, WAV, 3GP, AMR, and MIDI files are supported.
 
-Starting either NoFocus source stops the other source. This prevents accidental double playback while still allowing unrelated apps to play alongside it.
+Starting either NoFocus source stops the other NoFocus source while unrelated apps keep playing.
 
-## Build and validation
+## Build and test
 
-The app is Java-only and has no runtime Android dependencies. It targets Android 16/API 36 and supports Android 6/API 23 and newer.
+Android:
 
 ```powershell
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
-python -m unittest discover -s desktop_sender -p "test_*.py" -v
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
 
-Android 16 local-network restrictions use the Nearby Devices permission during the transition. The manifest also declares Android 17's dedicated local-network permission so the network boundary is explicit for the next target-SDK upgrade.
-
-For a sender diagnostic that opens the real system loopback and exits automatically:
+Native Windows sender:
 
 ```powershell
-python desktop_sender\nofocus_sender.py --host 127.0.0.1 --code ABCD-EFGH-JKLM-NPQR --duration 1
+dotnet run --project desktop\windows\NoFocus.Desktop\NoFocus.Desktop.csproj -c Release -- --self-test
+.\desktop\windows\build-release.ps1
 ```
+
+The one-file executable is written to `artifacts/windows-x64/NoFocus Speaker.exe`. Tagged GitHub builds and manual workflow runs are defined in `.github/workflows/release.yml`.
+
+The Python sender in `desktop_sender/` remains a developer and macOS/Linux fallback. Windows users should use the native one-click app.
+
+## Release safety
+
+The workflow labels the Android artifact as a debug APK. Before calling an Android build production-ready, sign a non-debug release with the publisher's protected Android signing key. For frictionless global Windows distribution, Authenticode-sign the EXE using the publisher's code-signing certificate; otherwise Microsoft SmartScreen may warn users who download a new unsigned binary.
 
 ## Protocol maintenance
 
-The wire version and fixed-size validation live in `WifiAudioProtocol.java` and `desktop_sender/nofocus_sender.py`. Any format change must increment `VERSION` in both implementations and add cross-language-compatible fixtures. Live audio intentionally does not retransmit: a late packet increases latency and is less useful than the receiver's one-frame silence concealment.
+The Android, native Windows, and Python protocol implementations must change together. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.

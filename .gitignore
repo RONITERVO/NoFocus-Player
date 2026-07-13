@@ -2,6 +2,9 @@
 .idea/
 .venv/
 **/build/
+**/bin/
+**/obj/
+artifacts/
 __pycache__/
 *.pyc
 *.iml

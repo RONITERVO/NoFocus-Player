@@ -209,7 +209,7 @@ public class MainActivity extends Activity {
         LinearLayout codeControls = new LinearLayout(this);
         codeControls.setOrientation(LinearLayout.HORIZONTAL);
         wifiCard.addView(codeControls, fullWidth());
-        codeControls.addView(createButton("Copy setup", v -> copyWifiSetup()), weighted());
+        codeControls.addView(createButton("Copy PC setup", v -> copyWifiSetup()), weighted());
         codeControls.addView(new View(this), new LinearLayout.LayoutParams(dp(8), 1));
         codeControls.addView(createButton("Rotate code", v -> rotatePairingCode()), weighted());
 
@@ -686,12 +686,12 @@ public class MainActivity extends Activity {
     }
 
     private void copyWifiSetup() {
-        String setup = "python nofocus_sender.py --host " + NetworkAddress.localIpv4()
-                + " --code " + PairingCode.display(currentPairingCode());
+        String setup = "nofocus://connect?host=" + NetworkAddress.localIpv4()
+                + "&code=" + PairingCode.display(currentPairingCode());
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
             clipboard.setPrimaryClip(ClipData.newPlainText("NoFocus sender setup", setup));
-            toast("Sender command copied.");
+            toast("PC setup copied. Paste it into NoFocus PC Speaker.");
         }
     }
 

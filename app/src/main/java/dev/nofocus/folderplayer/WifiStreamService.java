@@ -62,6 +62,7 @@ public class WifiStreamService extends Service {
     private AudioTrack audioTrack;
     private PowerManager.WakeLock wakeLock;
     private WifiManager.WifiLock wifiLock;
+    private WifiManager.MulticastLock multicastLock;
     private byte[] encryptionKey;
     private volatile long activeSession = Long.MIN_VALUE;
     private volatile InetAddress activeAddress;
@@ -187,8 +188,22 @@ public class WifiStreamService extends Service {
     private void handleDatagram(DatagramPacket datagram) throws GeneralSecurityException {
         byte[] data = datagram.getData();
         int length = datagram.getLength();
+        if (WifiAudioProtocol.isDiscoveryRequest(data, length)) {
+            DatagramSocket activeSocket = socket;
+            if (activeSocket != null) {
+                byte[] response = WifiAudioProtocol.discoveryResponse();
+                try {
+                    activeSocket.send(new DatagramPacket(response, response.length,
+                            datagram.getAddress(), datagram.getPort()));
+                } catch (Exception ignored) {
+                    // Discovery is optional; manual IP entry remains available.
+                }
+            }
+            return;
+        }
         if (length == WifiAudioProtocol.HELLO_SIZE) {
             WifiAudioProtocol.Hello hello = WifiAudioProtocol.parseHello(data, length, encryptionKey);
+            sendHelloAcknowledgement(datagram, hello.sessionId);
             boolean newSession = hello.sessionId != activeSession || !datagram.getAddress().equals(activeAddress);
             if (newSession) {
                 activeSession = hello.sessionId;
@@ -216,6 +231,20 @@ public class WifiStreamService extends Service {
         if (jitterBuffer.offer(packet.sequence, packet.pcm)) {
             receivedPackets++;
             lastPacketNs = System.nanoTime();
+        }
+    }
+
+    private void sendHelloAcknowledgement(DatagramPacket helloPacket, long sessionId) {
+        DatagramSocket activeSocket = socket;
+        if (activeSocket == null) {
+            return;
+        }
+        try {
+            byte[] acknowledgement = WifiAudioProtocol.helloAcknowledgement(sessionId, encryptionKey);
+            activeSocket.send(new DatagramPacket(acknowledgement, acknowledgement.length,
+                    helloPacket.getAddress(), helloPacket.getPort()));
+        } catch (Exception ignored) {
+            // The sender repeats hello packets, so a lost acknowledgement is harmless.
         }
     }
 
@@ -436,6 +465,9 @@ public class WifiStreamService extends Service {
             wifiLock = wifiManager.createWifiLock(WifiManager.WIFI_MODE_FULL_HIGH_PERF, "NoFocus:LowLatencyWifi");
             wifiLock.setReferenceCounted(false);
             wifiLock.acquire();
+            multicastLock = wifiManager.createMulticastLock("NoFocus:Discovery");
+            multicastLock.setReferenceCounted(false);
+            multicastLock.acquire();
         }
     }
 
@@ -448,6 +480,10 @@ public class WifiStreamService extends Service {
             wifiLock.release();
         }
         wifiLock = null;
+        if (multicastLock != null && multicastLock.isHeld()) {
+            multicastLock.release();
+        }
+        multicastLock = null;
     }
 
     private void applyVolume() {

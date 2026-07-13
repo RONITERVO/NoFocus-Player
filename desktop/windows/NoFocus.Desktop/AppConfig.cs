@@ -1,0 +1,61 @@
+using System.Security.Cryptography;
+using System.Text;
+using System.Text.Json;
+
+namespace NoFocus.Desktop;
+
+internal sealed class AppConfig
+{
+    public string PhoneAddress { get; set; } = "";
+    public string ProtectedPairingCode { get; set; } = "";
+
+    private static string DirectoryPath => Path.Combine(
+        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "NoFocus Speaker");
+    private static string FilePath => Path.Combine(DirectoryPath, "settings.json");
+
+    internal string PairingCode
+    {
+        get
+        {
+            if (string.IsNullOrEmpty(ProtectedPairingCode)) return "";
+            try
+            {
+                byte[] plain = ProtectedData.Unprotect(Convert.FromBase64String(ProtectedPairingCode), null,
+                    DataProtectionScope.CurrentUser);
+                return Encoding.UTF8.GetString(plain);
+            }
+            catch (CryptographicException)
+            {
+                return "";
+            }
+        }
+        set
+        {
+            byte[] protectedBytes = ProtectedData.Protect(Encoding.UTF8.GetBytes(value), null,
+                DataProtectionScope.CurrentUser);
+            ProtectedPairingCode = Convert.ToBase64String(protectedBytes);
+        }
+    }
+
+    internal static AppConfig Load()
+    {
+        try
+        {
+            return File.Exists(FilePath)
+                ? JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(FilePath)) ?? new AppConfig()
+                : new AppConfig();
+        }
+        catch (Exception)
+        {
+            return new AppConfig();
+        }
+    }
+
+    internal void Save()
+    {
+        Directory.CreateDirectory(DirectoryPath);
+        string temporary = FilePath + ".tmp";
+        File.WriteAllText(temporary, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
+        File.Move(temporary, FilePath, true);
+    }
+}
