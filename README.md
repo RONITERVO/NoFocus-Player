@@ -7,11 +7,11 @@ NoFocus Player lets an Android phone play either a local music folder or encrypt
 Requirements: Windows 10/11, Android 6 or newer, and both devices on the same home network. A strong 5 GHz or 6 GHz connection is recommended.
 
 1. Install and open **NoFocus Player** on the phone.
-2. Tap **Start Wi-Fi receiver**.
+2. Select **PC audio** and tap **Start**. **Connect PC** shows the pairing code.
 3. Download and open **NoFocus-Speaker-Windows-x64.exe** on the PC. It is self-contained; Python and .NET do not need to be installed.
 4. The PC normally finds the phone automatically. Enter the pairing code shown on the phone once, then click **Start listening on phone**.
 
-The PC remembers its setup and protects the pairing code with the current Windows account. On later launches, streaming is one click. If automatic discovery is blocked by a router or VPN, enter the phone address shown in the app. **Copy PC setup** and **Paste phone setup** provide another easy setup route when clipboard sync is enabled.
+The PC remembers its setup and protects the pairing code with the current Windows account. On later launches, streaming is one click. If automatic discovery is blocked by a router or VPN, find the phone address under **Connect PC → More options**. **Copy setup** on the phone and **Paste phone setup** on the PC provide another easy setup route when clipboard sync is enabled.
 
 The sender captures the default PC output, never the microphone. Changing the Windows default output device while streaming may require pressing Stop and Start once.
 
@@ -32,10 +32,10 @@ On the tested 32-logical-core Windows PC, the native app used roughly 35-39 MB w
 
 Audio is lossless 48 kHz stereo signed 16-bit PCM. Each encrypted packet contains 5 ms and remains below a normal LAN MTU. Redundancy keeps total traffic below 3.2 Mbit/s.
 
-The phone offers three profiles:
+The phone offers three profiles under **Connect PC → More options → Sound quality**. Changes apply the next time PC audio starts:
 
-- **Ultra-low - 10 ms:** lowest network buffering; best Wi-Fi required.
-- **Low - 20 ms:** recommended default.
+- **Fastest - 10 ms:** lowest network buffering; best Wi-Fi required.
+- **Balanced - 20 ms:** recommended default.
 - **Reliable - 40 ms:** for congested or weaker networks.
 
 Literal zero latency is physically impossible. PC capture, Wi-Fi scheduling, Android's mixer, and the DAC all add time. On an Honor 400 Pro running Android 16, Ultra held a 5-15 ms network queue with zero gaps while Android reported 23-31 ms for its fast output track. Describe this feature as **low latency**, not zero latency, unless an acoustic measurement on the target hardware proves otherwise.
@@ -55,13 +55,19 @@ Audio is sent directly over the local network on UDP port `39821`; there is no c
 
 ## Folder player
 
-1. Tap **Choose music folder** and select `Music` or one of its subfolders.
-2. Optionally use **Extract video audio**. The extractor copies supported source audio into an audio-only container without lossy re-encoding.
-3. Tap **Start / rescan folder**, then open YouTube or another app.
+1. Select **My music**, tap **Folder** (or **Choose** on first use), and select `Music` or one of its subfolders. Playback starts automatically.
+2. Use **Play / Pause**, **Previous / Next**, **Stop**, and **Volume** on the same screen. Open **Setup** for shuffle, choosing or rescanning a folder, and **Get video audio**. The extractor copies supported source audio into an audio-only container without lossy re-encoding.
+3. Open YouTube or another app; music keeps playing. Return to NoFocus to see the current playback state.
 
 Android 11 and newer may prevent selecting the storage root or `Download` directly. Common MP3, M4A, AAC, FLAC, Ogg/Opus, WebM, WAV, 3GP, AMR, and MIDI files are supported.
 
 Starting either NoFocus source stops the other NoFocus source while unrelated apps keep playing.
+
+## Compact phone interface
+
+The two audio modes have separate screens, with everyday controls visible without scrolling. Setup and extraction have their own short pages. Long track names are shortened to fit; tap the track area for the full name and any error details. Landscape uses two columns and shorter labels. Changing tabs only changes the visible controls; pressing Play or Start switches the audio source.
+
+Buttons and volume sliders have touch targets of at least 48 dp. Text follows Android's font setting, and layouts account for the status bar, navigation bar, and camera cutout. The device layout checks cover 320 × 480 dp, portrait and landscape, at 100%, 150%, and 200% font scale, plus the connected phone's normal display.
 
 ## Build and test
 
@@ -71,6 +77,17 @@ Android:
 .\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug
 adb install -r app\build\outputs\apk\debug\app-debug.apk
 ```
+
+Device UI regression checks (with the phone unlocked):
+
+```powershell
+.\gradlew.bat :app:assembleDebug :app:assembleDebugAndroidTest
+adb install -r app\build\outputs\apk\debug\app-debug.apk
+adb install -r app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk
+.\scripts\check-phone-ui.ps1
+```
+
+The script temporarily changes display size, density, rotation, and font scale, then restores their previous values in `finally`. It checks screen bounds, clipping, 48 dp controls, empty-folder and long-title states, and PC connection labels. It does not play audio or change media files, pairing codes, or volume. Android's own folder picker and full-detail dialogs may scroll when their contents require it.
 
 Native Windows sender:
 

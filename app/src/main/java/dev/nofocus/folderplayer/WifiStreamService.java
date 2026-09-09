@@ -41,6 +41,7 @@ public class WifiStreamService extends Service {
     public static final String EXTRA_STATUS = "status";
     public static final String EXTRA_SENDER = "sender";
     public static final String EXTRA_CONNECTED = "connected";
+    public static final String EXTRA_RUNNING = "running";
     public static final String EXTRA_BUFFERED_MS = "buffered_ms";
     public static final String EXTRA_LOST = "lost";
     public static final String EXTRA_TRIMMED = "trimmed";
@@ -79,6 +80,12 @@ public class WifiStreamService extends Service {
     private volatile int lastUnderrunCount;
     private volatile int stableBufferSeconds;
     private volatile String status = "Stopped";
+    private static volatile Intent lastState;
+
+    static Intent currentState() {
+        Intent state = lastState;
+        return state == null ? null : new Intent(state);
+    }
 
     @Override
     public void onCreate() {
@@ -117,6 +124,8 @@ public class WifiStreamService extends Service {
     @Override
     public void onDestroy() {
         stopStreamingResources();
+        status = "Stopped";
+        broadcastState();
         super.onDestroy();
     }
 
@@ -503,13 +512,19 @@ public class WifiStreamService extends Service {
 
     private void publishState() {
         ensureForeground(status);
+        broadcastState();
+    }
+
+    private void broadcastState() {
         Intent state = new Intent(ACTION_STATE).setPackage(getPackageName());
         state.putExtra(EXTRA_STATUS, status);
         state.putExtra(EXTRA_SENDER, senderName);
         state.putExtra(EXTRA_CONNECTED, activeAddress != null);
+        state.putExtra(EXTRA_RUNNING, running.get() && !"Stopped".equals(status));
         state.putExtra(EXTRA_BUFFERED_MS, bufferedMilliseconds());
         state.putExtra(EXTRA_LOST, missingPackets + jitterBuffer.getRejectedPackets());
         state.putExtra(EXTRA_TRIMMED, trimmedPackets);
+        lastState = new Intent(state);
         sendBroadcast(state);
     }
 

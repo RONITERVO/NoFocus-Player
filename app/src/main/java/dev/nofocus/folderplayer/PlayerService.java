@@ -55,6 +55,15 @@ public class PlayerService extends Service {
     public static final String EXTRA_TRACK_COUNT = "extra_track_count";
     public static final String EXTRA_TRACK_INDEX = "extra_track_index";
     public static final String EXTRA_IS_PLAYING = "extra_is_playing";
+    public static final String EXTRA_PREPARING = "extra_preparing";
+    public static final String EXTRA_ACTIVE = "extra_active";
+
+    private static volatile Intent lastState;
+
+    static Intent currentState() {
+        Intent state = lastState;
+        return state == null ? null : new Intent(state);
+    }
 
     private static final String CHANNEL_ID = "nofocus_playback";
     private static final int NOTIFICATION_ID = 42;
@@ -143,6 +152,11 @@ public class PlayerService extends Service {
     public void onDestroy() {
         releasePlayerOnly();
         scanner.shutdownNow();
+        playlist.clear();
+        currentIndex = -1;
+        currentTrackName = null;
+        status = "Stopped";
+        broadcastState();
         super.onDestroy();
     }
 
@@ -633,6 +647,9 @@ public class PlayerService extends Service {
         state.putExtra(EXTRA_TRACK_COUNT, playlist.size());
         state.putExtra(EXTRA_TRACK_INDEX, currentIndex);
         state.putExtra(EXTRA_IS_PLAYING, isActuallyPlaying());
+        state.putExtra(EXTRA_PREPARING, preparing);
+        state.putExtra(EXTRA_ACTIVE, !"Stopped".equals(status));
+        lastState = new Intent(state);
         sendBroadcast(state);
     }
 
