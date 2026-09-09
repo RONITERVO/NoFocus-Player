@@ -3,34 +3,39 @@ package dev.nofocus.folderplayer;
 import android.Manifest;
 import android.annotation.SuppressLint;
 import android.app.Activity;
+import android.app.AlertDialog;
+import android.content.BroadcastReceiver;
 import android.content.ClipData;
 import android.content.ClipboardManager;
-import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.IntentFilter;
 import android.content.SharedPreferences;
 import android.content.UriPermission;
 import android.content.pm.PackageManager;
+import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.Handler;
 import android.os.Looper;
 import android.provider.DocumentsContract;
+import android.text.TextUtils;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowInsets;
+import android.window.OnBackInvokedCallback;
+import android.window.OnBackInvokedDispatcher;
 import android.widget.Button;
-import android.widget.ArrayAdapter;
 import android.widget.CheckBox;
-import android.widget.CompoundButton;
+import android.widget.ImageButton;
 import android.widget.LinearLayout;
-import android.widget.ScrollView;
 import android.widget.SeekBar;
-import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
@@ -40,631 +45,708 @@ import java.util.concurrent.Executors;
 public class MainActivity extends Activity {
     private static final int REQUEST_TREE = 1001;
     private static final int REQUEST_NETWORK = 1003;
+    private static final int REQUEST_NOTIFICATIONS = 1004;
     private static final String ACCESS_LOCAL_NETWORK = "android.permission.ACCESS_LOCAL_NETWORK";
+    private static final String PREF_MODE = "ui_music_mode";
+    private static final int INK = Color.rgb(23, 44, 47);
+    private static final int MUTED = Color.rgb(77, 101, 104);
+    private static final int ACCENT = Color.rgb(0, 100, 91);
+    private static final int SURFACE = Color.rgb(242, 247, 245);
+    private static final int TINT = Color.rgb(223, 238, 232);
 
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
     private final ExecutorService extractionExecutor = Executors.newSingleThreadExecutor();
-
     private SharedPreferences prefs;
-    private TextView folderView;
-    private TextView statusView;
-    private TextView nowPlayingView;
-    private TextView countView;
+    private LinearLayout root;
+    private TextView titleView;
+    private TextView detailView;
     private TextView extractionView;
-    private Button playPauseButton;
+    private Button primaryButton;
+    private Button stopButton;
     private Button extractButton;
-    private CheckBox shuffleCheck;
-    private SeekBar volumeSeek;
-    private TextView wifiStatusView;
-    private TextView wifiEndpointView;
-    private TextView wifiCodeView;
-    private SeekBar wifiVolumeSeek;
-    private Spinner latencySpinner;
-    private Button wifiStartButton;
-    private boolean receiverRegistered = false;
-    private boolean extractionRunning = false;
+    private ImageButton previousButton;
+    private ImageButton nextButton;
+    private boolean musicMode;
+    private String page = "home";
+    private boolean receiverRegistered;
+    private boolean extractionRunning;
+    private boolean pendingWifiStart;
+    private String extractionText = "Saves audio in your music folder.";
+    private Intent playerState;
+    private Intent wifiState;
+    private OnBackInvokedCallback backCallback;
+    private boolean backCallbackRegistered;
 
     private final BroadcastReceiver stateReceiver = new BroadcastReceiver() {
-        @Override
-        public void onReceive(Context context, Intent intent) {
-            if (intent == null) {
-                return;
+        @Override public void onReceive(Context context, Intent intent) {
+            if (PlayerService.ACTION_STATE.equals(intent.getAction())) {
+                playerState = intent;
+            } else if (WifiStreamService.ACTION_STATE.equals(intent.getAction())) {
+                wifiState = intent;
             }
-            if (WifiStreamService.ACTION_STATE.equals(intent.getAction())) {
-                String wifiStatus = intent.getStringExtra(WifiStreamService.EXTRA_STATUS);
-                boolean connected = intent.getBooleanExtra(WifiStreamService.EXTRA_CONNECTED, false);
-                wifiStatusView.setText(nonEmpty(wifiStatus, "Stopped"));
-                wifiStartButton.setText(connected ? "Receiver running" : "Start Wi-Fi receiver");
-                return;
-            }
-            if (!PlayerService.ACTION_STATE.equals(intent.getAction())) {
-                return;
-            }
-            String state = intent.getStringExtra(PlayerService.EXTRA_STATE);
-            String track = intent.getStringExtra(PlayerService.EXTRA_TRACK_NAME);
-            int count = intent.getIntExtra(PlayerService.EXTRA_TRACK_COUNT, 0);
-            int index = intent.getIntExtra(PlayerService.EXTRA_TRACK_INDEX, -1);
-            boolean playing = intent.getBooleanExtra(PlayerService.EXTRA_IS_PLAYING, false);
-
-            statusView.setText(nonEmpty(state, "Idle"));
-            nowPlayingView.setText(track == null ? "-" : track);
-            if (count > 0 && index >= 0) {
-                countView.setText((index + 1) + " of " + count + " tracks");
-            } else {
-                countView.setText(count + " tracks");
-            }
-            playPauseButton.setText(playing ? "Pause" : "Play");
+            updatePlayback();
         }
     };
 
-    @Override
-    protected void onCreate(Bundle savedInstanceState) {
+    @Override protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        if (Build.VERSION.SDK_INT >= 26) {
+            getWindow().setNavigationBarColor(SURFACE);
+            getWindow().getDecorView().setSystemUiVisibility(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+                    | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        }
         prefs = getSharedPreferences(PlayerService.PREFS, MODE_PRIVATE);
+        musicMode = prefs.getBoolean(PREF_MODE, false);
+        if (savedInstanceState != null) {
+            page = savedInstanceState.getString("page", "home");
+            pendingWifiStart = savedInstanceState.getBoolean("pendingWifiStart");
+        }
         ensurePairingCode();
-        requestNotificationPermissionIfNeeded();
+        refreshState();
         buildUi();
-        updateFolderText();
+        requestNotificationPermissionIfNeeded();
     }
 
-    @Override
-    @SuppressLint("UnspecifiedRegisterReceiverFlag")
+    @Override protected void onSaveInstanceState(Bundle state) {
+        super.onSaveInstanceState(state);
+        state.putString("page", page);
+        state.putBoolean("pendingWifiStart", pendingWifiStart);
+    }
+
+    @Override @SuppressLint("UnspecifiedRegisterReceiverFlag")
     protected void onResume() {
         super.onResume();
         IntentFilter filter = new IntentFilter(PlayerService.ACTION_STATE);
         filter.addAction(WifiStreamService.ACTION_STATE);
         if (Build.VERSION.SDK_INT >= 33) {
+            if (backCallback == null) backCallback = this::onBackPressed;
             registerReceiver(stateReceiver, filter, Context.RECEIVER_NOT_EXPORTED);
         } else {
             registerReceiver(stateReceiver, filter);
         }
         receiverRegistered = true;
-        updateFolderText();
-        if (wifiEndpointView != null) {
-            wifiEndpointView.setText("Phone: " + NetworkAddress.localIpv4() + ":" + WifiAudioProtocol.PORT);
-        }
+        refreshState();
+        buildUi();
     }
 
-    @Override
-    protected void onPause() {
+    @Override protected void onPause() {
         if (receiverRegistered) {
-            try {
-                unregisterReceiver(stateReceiver);
-            } catch (IllegalArgumentException ignored) {
-                // Receiver was already gone.
-            }
+            unregisterReceiver(stateReceiver);
             receiverRegistered = false;
         }
         super.onPause();
     }
 
-    @Override
-    protected void onDestroy() {
+    @Override protected void onDestroy() {
         extractionExecutor.shutdownNow();
         super.onDestroy();
     }
 
+    private void refreshState() {
+        playerState = PlayerService.currentState();
+        wifiState = WifiStreamService.currentState();
+    }
+
+    private void showPage(String destination) {
+        page = destination;
+        buildUi();
+    }
+
+    @Override public void onBackPressed() {
+        if (!"home".equals(page)) {
+            showPage("quality".equals(page) ? "options" : "extract".equals(page) || "options".equals(page) ? "setup" : "home");
+        } else {
+            super.onBackPressed();
+        }
+    }
+
     private void buildUi() {
-        int pad = dp(20);
-        ScrollView scrollView = new ScrollView(this);
-        scrollView.setClipToPadding(false);
-        scrollView.setFillViewport(true);
-        scrollView.setBackgroundColor(Color.parseColor("#F0F2F5"));
-
-        LinearLayout root = new LinearLayout(this);
-        root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, dp(32), pad, dp(40));
-        scrollView.addView(root, new ScrollView.LayoutParams(
-                ScrollView.LayoutParams.MATCH_PARENT,
-                ScrollView.LayoutParams.WRAP_CONTENT
-        ));
-
-        TextView title = new TextView(this);
-        title.setText("NoFocus Player");
-        title.setTextSize(28);
-        title.setTextColor(Color.parseColor("#111111"));
-        title.setTypeface(Typeface.create("sans-serif-black", Typeface.NORMAL));
-        title.setPadding(0, 0, 0, dp(8));
-        root.addView(title, fullWidth());
-
-        TextView explanation = new TextView(this);
-        explanation.setText("Plays local folder music without requesting audio focus. Designed to run alongside apps like YouTube.");
-        explanation.setTextSize(15);
-        explanation.setTextColor(Color.parseColor("#555555"));
-        explanation.setLineSpacing(dp(4), 1f);
-        explanation.setPadding(0, 0, 0, dp(24));
-        root.addView(explanation, fullWidth());
-
-        LinearLayout wifiCard = createCard(root);
-        wifiCard.addView(createSectionLabel("WI-FI SPEAKER"));
-
-        TextView wifiExplanation = new TextView(this);
-        wifiExplanation.setText("Stream lossless system audio from a computer over your local network. Encrypted, low latency, and no audio focus.");
-        wifiExplanation.setTextSize(14);
-        wifiExplanation.setTextColor(Color.parseColor("#555555"));
-        wifiExplanation.setPadding(0, dp(8), 0, dp(12));
-        wifiCard.addView(wifiExplanation, fullWidth());
-
-        wifiStatusView = new TextView(this);
-        wifiStatusView.setText("Stopped");
-        wifiStatusView.setTextSize(16);
-        wifiStatusView.setTextColor(Color.parseColor("#222222"));
-        wifiStatusView.setPadding(0, 0, 0, dp(12));
-        wifiCard.addView(wifiStatusView, fullWidth());
-
-        wifiEndpointView = new TextView(this);
-        wifiEndpointView.setText("Phone: " + NetworkAddress.localIpv4() + ":" + WifiAudioProtocol.PORT);
-        wifiEndpointView.setTextSize(14);
-        wifiEndpointView.setTextColor(Color.parseColor("#555555"));
-        wifiCard.addView(wifiEndpointView, fullWidth());
-
-        wifiCodeView = new TextView(this);
-        wifiCodeView.setText("Pairing code: " + PairingCode.display(currentPairingCode()));
-        wifiCodeView.setTextSize(16);
-        wifiCodeView.setTypeface(Typeface.MONOSPACE);
-        wifiCodeView.setTextColor(Color.parseColor("#111111"));
-        wifiCodeView.setPadding(0, dp(8), 0, dp(8));
-        wifiCard.addView(wifiCodeView, fullWidth());
-
-        LinearLayout codeControls = new LinearLayout(this);
-        codeControls.setOrientation(LinearLayout.HORIZONTAL);
-        wifiCard.addView(codeControls, fullWidth());
-        codeControls.addView(createButton("Copy PC setup", v -> copyWifiSetup()), weighted());
-        codeControls.addView(new View(this), new LinearLayout.LayoutParams(dp(8), 1));
-        codeControls.addView(createButton("Rotate code", v -> rotatePairingCode()), weighted());
-
-        TextView latencyLabel = new TextView(this);
-        latencyLabel.setText("Network jitter buffer");
-        latencyLabel.setTextSize(12);
-        latencyLabel.setTextColor(Color.parseColor("#888888"));
-        latencyLabel.setPadding(0, dp(16), 0, dp(4));
-        wifiCard.addView(latencyLabel, fullWidth());
-
-        latencySpinner = new Spinner(this);
-        String[] profiles = new String[]{"Ultra-low · 10 ms", "Low · 20 ms", "Reliable · 40 ms"};
-        ArrayAdapter<String> latencyAdapter = new ArrayAdapter<>(this, android.R.layout.simple_spinner_item, profiles);
-        latencyAdapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
-        latencySpinner.setAdapter(latencyAdapter);
-        int savedPackets = prefs.getInt(WifiStreamService.PREF_LATENCY_PACKETS, 4);
-        latencySpinner.setSelection(savedPackets <= 2 ? 0 : savedPackets >= 8 ? 2 : 1);
-        wifiCard.addView(latencySpinner, fullWidth());
-
-        TextView wifiVolumeLabel = new TextView(this);
-        wifiVolumeLabel.setText("Wi-Fi stream volume");
-        wifiVolumeLabel.setTextSize(12);
-        wifiVolumeLabel.setTextColor(Color.parseColor("#888888"));
-        wifiVolumeLabel.setPadding(0, dp(12), 0, 0);
-        wifiCard.addView(wifiVolumeLabel, fullWidth());
-
-        wifiVolumeSeek = new SeekBar(this);
-        wifiVolumeSeek.setMax(100);
-        wifiVolumeSeek.setProgress(Math.round(prefs.getFloat(WifiStreamService.PREF_STREAM_VOLUME, 1f) * 100f));
-        wifiVolumeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) {
-                    prefs.edit().putFloat(WifiStreamService.PREF_STREAM_VOLUME, progress / 100f).apply();
-                }
-            }
-            @Override public void onStartTrackingTouch(SeekBar seekBar) { }
-            @Override public void onStopTrackingTouch(SeekBar seekBar) {
-                startWifiAction(WifiStreamService.ACTION_SET_VOLUME);
-            }
-        });
-        wifiCard.addView(wifiVolumeSeek, fullWidth());
-
-        wifiStartButton = createButton("Start Wi-Fi receiver", v -> {
-            int selection = latencySpinner.getSelectedItemPosition();
-            prefs.edit().putInt(WifiStreamService.PREF_LATENCY_PACKETS,
-                    selection == 0 ? 2 : selection == 2 ? 8 : 4).apply();
-            stopFolderPlayback();
-            startWifiAction(WifiStreamService.ACTION_START);
-        });
-        wifiCard.addView(wifiStartButton);
-        wifiCard.addView(createButton("Stop Wi-Fi receiver", v -> startWifiAction(WifiStreamService.ACTION_STOP)));
-
-        LinearLayout sourceCard = createCard(root);
-        sourceCard.addView(createSectionLabel("MUSIC SOURCE"));
-
-        folderView = new TextView(this);
-        folderView.setTextSize(16);
-        folderView.setTextColor(Color.parseColor("#222222"));
-        folderView.setPadding(0, dp(8), 0, dp(16));
-        sourceCard.addView(folderView, fullWidth());
-
-        sourceCard.addView(createButton("Choose music folder", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                chooseFolder();
-            }
-        }));
-
-        sourceCard.addView(createButton("Start / rescan folder", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                if (!hasFolder()) {
-                    toast("Choose a folder first.");
-                    return;
-                }
-                startPlayerAction(PlayerService.ACTION_PLAY);
-            }
-        }));
-
-        sourceCard.addView(createDivider(dp(20), dp(20)));
-        sourceCard.addView(createSectionLabel("EXTRACTION TOOLS"));
-
-        extractionView = new TextView(this);
-        extractionView.setText("Idle");
-        extractionView.setTextSize(14);
-        extractionView.setTextColor(Color.parseColor("#555555"));
-        extractionView.setPadding(0, dp(8), 0, dp(12));
-        sourceCard.addView(extractionView, fullWidth());
-
-        extractButton = createButton("Extract video audio", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startAudioExtraction();
-            }
-        });
-        sourceCard.addView(extractButton);
-
-        LinearLayout playingCard = createCard(root);
-        playingCard.addView(createSectionLabel("NOW PLAYING"));
-
-        statusView = new TextView(this);
-        statusView.setText("Idle");
-        statusView.setTextSize(22);
-        statusView.setTextColor(Color.parseColor("#111111"));
-        statusView.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        statusView.setPadding(0, dp(8), 0, dp(4));
-        playingCard.addView(statusView, fullWidth());
-
-        nowPlayingView = new TextView(this);
-        nowPlayingView.setText("-");
-        nowPlayingView.setTextSize(16);
-        nowPlayingView.setTextColor(Color.parseColor("#444444"));
-        playingCard.addView(nowPlayingView, fullWidth());
-
-        countView = new TextView(this);
-        countView.setText("0 tracks");
-        countView.setTextSize(14);
-        countView.setTextColor(Color.parseColor("#888888"));
-        countView.setPadding(0, dp(4), 0, dp(24));
-        playingCard.addView(countView, fullWidth());
-
-        LinearLayout controlsRow = new LinearLayout(this);
-        controlsRow.setOrientation(LinearLayout.HORIZONTAL);
-        controlsRow.setGravity(Gravity.CENTER_VERTICAL);
-        playingCard.addView(controlsRow, fullWidth());
-
-        controlsRow.addView(createButton("Prev", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startPlayerAction(PlayerService.ACTION_PREVIOUS);
-            }
-        }), weighted());
-
-        controlsRow.addView(new View(this), new LinearLayout.LayoutParams(dp(8), LinearLayout.LayoutParams.MATCH_PARENT));
-
-        playPauseButton = createButton("Play", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startPlayerAction(PlayerService.ACTION_TOGGLE_PLAY_PAUSE);
-            }
-        });
-        playPauseButton.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
-        controlsRow.addView(playPauseButton, new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.2f));
-
-        controlsRow.addView(new View(this), new LinearLayout.LayoutParams(dp(8), LinearLayout.LayoutParams.MATCH_PARENT));
-
-        controlsRow.addView(createButton("Next", new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startPlayerAction(PlayerService.ACTION_NEXT);
-            }
-        }), weighted());
-
-        playingCard.addView(createDivider(dp(24), dp(16)));
-
-        LinearLayout settingsRow = new LinearLayout(this);
-        settingsRow.setOrientation(LinearLayout.HORIZONTAL);
-        settingsRow.setGravity(Gravity.CENTER_VERTICAL);
-        playingCard.addView(settingsRow, fullWidth());
-
-        shuffleCheck = new CheckBox(this);
-        shuffleCheck.setText("Shuffle");
-        shuffleCheck.setTextColor(Color.parseColor("#222222"));
-        shuffleCheck.setChecked(prefs.getBoolean(PlayerService.PREF_SHUFFLE, false));
-        shuffleCheck.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            @Override
-            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-                prefs.edit().putBoolean(PlayerService.PREF_SHUFFLE, isChecked).apply();
-                startPlayerAction(PlayerService.ACTION_SET_SHUFFLE);
-            }
-        });
-        settingsRow.addView(shuffleCheck);
-
-        LinearLayout volumeBox = new LinearLayout(this);
-        volumeBox.setOrientation(LinearLayout.VERTICAL);
-        volumeBox.setPadding(dp(16), 0, 0, 0);
-
-        TextView volumeLabel = new TextView(this);
-        volumeLabel.setText("App volume");
-        volumeLabel.setTextSize(12);
-        volumeLabel.setTextColor(Color.parseColor("#888888"));
-        volumeBox.addView(volumeLabel);
-
-        volumeSeek = new SeekBar(this);
-        volumeSeek.setMax(100);
-        volumeSeek.setProgress(Math.round(prefs.getFloat(PlayerService.PREF_VOLUME, 1.0f) * 100f));
-        volumeSeek.setPadding(0, dp(8), 0, dp(8));
-        volumeSeek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
-            @Override
-            public void onProgressChanged(SeekBar seekBar, int progress, boolean fromUser) {
-                if (fromUser) {
-                    float volume = Math.max(0f, Math.min(1f, progress / 100f));
-                    prefs.edit().putFloat(PlayerService.PREF_VOLUME, volume).apply();
-                }
-            }
-
-            @Override
-            public void onStartTrackingTouch(SeekBar seekBar) {
-            }
-
-            @Override
-            public void onStopTrackingTouch(SeekBar seekBar) {
-                startPlayerAction(PlayerService.ACTION_SET_VOLUME);
-            }
-        });
-        volumeBox.addView(volumeSeek, fullWidth());
-        settingsRow.addView(volumeBox, weighted());
-
-        Button stopButton = new Button(this);
-        stopButton.setText("Stop background service");
-        stopButton.setTextColor(Color.parseColor("#D32F2F"));
-        stopButton.setBackgroundColor(Color.TRANSPARENT);
-        if (Build.VERSION.SDK_INT >= 21) {
-            stopButton.setStateListAnimator(null);
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (backCallbackRegistered) getOnBackInvokedDispatcher().unregisterOnBackInvokedCallback(backCallback);
+            backCallbackRegistered = !"home".equals(page);
+            if (backCallbackRegistered) getOnBackInvokedDispatcher().registerOnBackInvokedCallback(
+                    OnBackInvokedDispatcher.PRIORITY_DEFAULT, backCallback);
         }
-        stopButton.setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                startPlayerAction(PlayerService.ACTION_STOP);
+        titleView = null;
+        detailView = null;
+        extractionView = null;
+        extractButton = null;
+        root = column();
+        root.setBackgroundColor(SURFACE);
+        root.setPadding(dp(16), dp(8), dp(16), dp(8));
+        // Android 15+ draws behind the system bars. Use the actual safe area, not fixed top padding.
+        root.setOnApplyWindowInsetsListener((view, insets) -> {
+            int left, top, right, bottom;
+            if (Build.VERSION.SDK_INT >= 30) {
+                android.graphics.Insets safe = insets.getInsets(
+                        WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+                left = safe.left; top = safe.top; right = safe.right; bottom = safe.bottom;
+            } else {
+                left = insets.getSystemWindowInsetLeft(); top = insets.getSystemWindowInsetTop();
+                right = insets.getSystemWindowInsetRight(); bottom = insets.getSystemWindowInsetBottom();
             }
+            view.setPadding(left + dp(16), top + dp(8), right + dp(16), bottom + dp(8));
+            return insets.consumeSystemWindowInsets();
         });
-        LinearLayout.LayoutParams stopParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        stopParams.gravity = Gravity.CENTER_HORIZONTAL;
-        stopParams.setMargins(0, dp(8), 0, dp(16));
-        root.addView(stopButton, stopParams);
-
-        TextView usage = new TextView(this);
-        usage.setText("Choose a music subfolder, press Start, then open YouTube. Android 11+ may block storage root or Download; choose Music or a subfolder instead.");
-        usage.setTextSize(13);
-        usage.setTextColor(Color.parseColor("#888888"));
-        usage.setGravity(Gravity.CENTER_HORIZONTAL);
-        usage.setLineSpacing(dp(2), 1f);
-        usage.setPadding(dp(16), 0, dp(16), dp(16));
-        root.addView(usage, fullWidth());
-
-        setContentView(scrollView);
-    }
-
-    private LinearLayout createCard(LinearLayout parent) {
-        LinearLayout card = new LinearLayout(this);
-        card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(dp(20), dp(20), dp(20), dp(20));
-
-        GradientDrawable background = new GradientDrawable();
-        background.setColor(Color.WHITE);
-        background.setCornerRadius(dp(8));
-        card.setBackground(background);
-
-        if (Build.VERSION.SDK_INT >= 21) {
-            card.setElevation(dp(2));
+        if ("home".equals(page)) {
+            buildHome();
+        } else {
+            buildHeader("quality".equals(page) ? "Sound quality" : "extract".equals(page)
+                    ? "Video audio" : "options".equals(page) ? "PC options" : musicMode ? "Music setup" : "PC setup", true);
+            if ("quality".equals(page)) buildQuality();
+            else if ("options".equals(page)) buildWifiOptions();
+            else if ("extract".equals(page)) buildExtraction();
+            else if (musicMode) buildMusicSetup();
+            else buildWifiSetup();
         }
-
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        params.setMargins(0, dp(8), 0, dp(16));
-        parent.addView(card, params);
-        return card;
+        setContentView(root);
+        root.requestApplyInsets();
+        updatePlayback();
     }
 
-    private TextView createSectionLabel(String text) {
-        TextView label = new TextView(this);
-        label.setText(text);
-        label.setTextSize(12);
-        label.setTextColor(Color.parseColor("#888888"));
-        label.setTypeface(Typeface.create("sans-serif-medium", Typeface.NORMAL));
-        return label;
+    private void buildHeader(String title, boolean back) {
+        LinearLayout header = row();
+        if (back) {
+            Button backButton = button("Back", v -> onBackPressed(), false);
+            header.addView(backButton, new LinearLayout.LayoutParams(-2, dp(48)));
+            gap(header, 8);
+        }
+        TextView heading = text(title, 20, INK);
+        heading.setTypeface(null, Typeface.BOLD);
+        heading.setSingleLine();
+        heading.setEllipsize(TextUtils.TruncateAt.END);
+        header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
+        if (!back) {
+            Button setup = button("Setup", v -> showPage("setup"), false);
+            header.addView(setup, new LinearLayout.LayoutParams(-2, dp(48)));
+        }
+        root.addView(header, fullWidth());
     }
 
-    private Button createButton(String text, View.OnClickListener listener) {
+    private void buildHome() {
+        buildHeader("NoFocus", false);
+        LinearLayout informationColumn = root;
+        LinearLayout controlsColumn = root;
+        if (isLandscape()) {
+            LinearLayout columns = row();
+            informationColumn = column();
+            controlsColumn = column();
+            controlsColumn.setGravity(Gravity.CENTER_VERTICAL);
+            columns.addView(informationColumn, new LinearLayout.LayoutParams(0, -1, 1));
+            gap(columns, 16);
+            columns.addView(controlsColumn, new LinearLayout.LayoutParams(0, -1, 1));
+            root.addView(columns, new LinearLayout.LayoutParams(-1, 0, 1));
+        }
+        LinearLayout modes = row();
+        boolean shortTabs = isLandscape() || getResources().getConfiguration().fontScale >= 1.75f;
+        Button pc = button(shortTabs ? "PC" : "PC audio", v -> selectMode(false), !musicMode);
+        pc.setSelected(!musicMode);
+        pc.setContentDescription("PC audio");
+        Button music = button(shortTabs ? "Music" : "My music", v -> selectMode(true), musicMode);
+        music.setSelected(musicMode);
+        music.setContentDescription("My music");
+        if (isLandscape()) {
+            int tabSize = getResources().getConfiguration().fontScale >= 1.75f ? 14 : 16;
+            pc.setTextSize(tabSize);
+            music.setTextSize(tabSize);
+            pc.setPadding(0, 0, 0, 0);
+            music.setPadding(0, 0, 0, 0);
+        }
+        modes.addView(pc, weighted(52));
+        gap(modes, 8);
+        modes.addView(music, weighted(52));
+        informationColumn.addView(modes, spaced(4));
+
+        LinearLayout information = column();
+        information.setGravity(Gravity.CENTER);
+        information.setPadding(dp(8), dp(4), dp(8), dp(4));
+        titleView = text("", 24, INK);
+        titleView.setTypeface(null, Typeface.BOLD);
+        titleView.setGravity(Gravity.CENTER);
+        titleView.setMaxLines(2);
+        titleView.setEllipsize(TextUtils.TruncateAt.END);
+        detailView = text("", 16, MUTED);
+        detailView.setGravity(Gravity.CENTER);
+        detailView.setSingleLine();
+        detailView.setEllipsize(TextUtils.TruncateAt.END);
+        information.addView(titleView, fullWidth());
+        information.addView(detailView, fullWidth());
+        TextView trackTitle = titleView;
+        TextView status = detailView;
+        information.addOnLayoutChangeListener((view, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom) -> {
+            int available = bottom - top - view.getPaddingTop() - view.getPaddingBottom()
+                    - status.getLineHeight() - fontPadding(status);
+            int lines = available >= trackTitle.getLineHeight() * 2 + fontPadding(trackTitle) ? 2 : 1;
+            if (trackTitle.getMaxLines() != lines) trackTitle.setMaxLines(lines);
+        });
+        information.setContentDescription(musicMode ? "Track and playback details" : "Connection details");
+        information.setFocusable(true);
+        information.setOnClickListener(v -> showDetails());
+        informationColumn.addView(information, new LinearLayout.LayoutParams(-1, 0, 1));
+
+        LinearLayout transport = row();
+        if (musicMode && !isLandscape()) {
+            previousButton = skipButton("Previous track", R.drawable.ic_skip_previous_24,
+                    PlayerService.ACTION_PREVIOUS);
+            transport.addView(previousButton, new LinearLayout.LayoutParams(dp(56), dp(64)));
+            gap(transport, 8);
+        }
+        primaryButton = button("", v -> {
+            if (musicMode) {
+                if (!hasFolder()) chooseFolder();
+                else startPlayerAction(PlayerService.ACTION_TOGGLE_PLAY_PAUSE);
+            } else {
+                startWifiAction(isWifiRunning() ? WifiStreamService.ACTION_STOP : WifiStreamService.ACTION_START);
+            }
+        }, true);
+        primaryButton.setTextSize(22);
+        transport.addView(primaryButton, weighted(64));
+        if (musicMode && !isLandscape()) {
+            gap(transport, 8);
+            nextButton = skipButton("Next track", R.drawable.ic_skip_next_24, PlayerService.ACTION_NEXT);
+            transport.addView(nextButton, new LinearLayout.LayoutParams(dp(56), dp(64)));
+        }
+        controlsColumn.addView(transport, spaced(isLandscape() ? 0 : 4));
+        if (musicMode) {
+            LinearLayout secondary = row();
+            if (isLandscape()) {
+                previousButton = skipButton("Previous track", R.drawable.ic_skip_previous_24, PlayerService.ACTION_PREVIOUS);
+                secondary.addView(previousButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
+            } else {
+                secondary.addView(button("Folder", v -> chooseFolder(), false), weighted(48));
+            }
+            gap(secondary, 4);
+            stopButton = button("Stop", v -> stopFolderPlayback(), false);
+            if (isLandscape()) {
+                stopButton.setTextSize(16);
+                stopButton.setPadding(0, 0, 0, 0);
+            }
+            secondary.addView(stopButton, weighted(48));
+            if (isLandscape()) {
+                gap(secondary, 4);
+                nextButton = skipButton("Next track", R.drawable.ic_skip_next_24, PlayerService.ACTION_NEXT);
+                secondary.addView(nextButton, new LinearLayout.LayoutParams(dp(48), dp(48)));
+            }
+            controlsColumn.addView(secondary, spaced(isLandscape() ? 0 : 4));
+        } else {
+            Button connect = button(isLandscape() ? "Connect" : "Connect PC", v -> showPage("setup"), false);
+            connect.setContentDescription("Connect PC");
+            controlsColumn.addView(connect, spaced(isLandscape() ? 0 : 4));
+        }
+        buildVolume(controlsColumn);
+    }
+
+    private void selectMode(boolean music) {
+        musicMode = music;
+        prefs.edit().putBoolean(PREF_MODE, music).apply();
+        buildUi();
+    }
+
+    private void buildVolume(LinearLayout parent) {
+        LinearLayout volumeRow = row();
+        TextView label = text("Volume", 16, MUTED);
+        volumeRow.addView(label);
+        SeekBar seek = new SeekBar(this);
+        seek.setContentDescription(musicMode ? "Music volume" : "PC audio volume");
+        seek.setMax(100);
+        String key = musicMode ? PlayerService.PREF_VOLUME : WifiStreamService.PREF_STREAM_VOLUME;
+        seek.setProgress(Math.round(prefs.getFloat(key, 1f) * 100));
+        seek.setMinimumHeight(dp(48));
+        seek.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+            @Override public void onProgressChanged(SeekBar bar, int progress, boolean fromUser) {
+                if (!fromUser) return;
+                prefs.edit().putFloat(key, progress / 100f).apply();
+                // Changing a setting while stopped must not start a playback service.
+                if (musicMode && hasPlayerSession()) startPlayerAction(PlayerService.ACTION_SET_VOLUME);
+                else if (!musicMode && isWifiRunning()) startWifiAction(WifiStreamService.ACTION_SET_VOLUME);
+            }
+            @Override public void onStartTrackingTouch(SeekBar bar) { }
+            @Override public void onStopTrackingTouch(SeekBar bar) { }
+        });
+        volumeRow.addView(seek, weighted(48));
+        parent.addView(volumeRow, fullWidth());
+    }
+
+    private void buildWifiSetup() {
+        LinearLayout pairing = root;
+        LinearLayout actions = root;
+        if (isLandscape()) {
+            LinearLayout columns = row();
+            pairing = column();
+            actions = column();
+            actions.setGravity(Gravity.CENTER_VERTICAL);
+            columns.addView(pairing, new LinearLayout.LayoutParams(0, -1, 1));
+            gap(columns, 16);
+            columns.addView(actions, new LinearLayout.LayoutParams(0, -1, 1));
+            root.addView(columns, new LinearLayout.LayoutParams(-1, 0, 1));
+        }
+        pairing.addView(text(isLandscape() ? "Pairing code" : "Code for your PC", 16, MUTED), spaced(8));
+        TextView code = text(displayCode(), isLandscape() ? 18 : 24, INK);
+        code.setTypeface(Typeface.MONOSPACE);
+        code.setGravity(Gravity.CENTER);
+        pairing.addView(code, spaced(8));
+        if (!isLandscape()) spacer();
+        Button copy = button("Copy setup", v -> copyWifiSetup(), true);
+        actions.addView(copy, spaced(8));
+        actions.addView(button("More options", v -> showPage("options"), false), spaced(8));
+    }
+
+    private void buildWifiOptions() {
+        LinearLayout details = root;
+        LinearLayout options = root;
+        if (isLandscape()) {
+            LinearLayout columns = row();
+            details = column();
+            options = column();
+            columns.addView(details, new LinearLayout.LayoutParams(0, -1, 1));
+            gap(columns, 16);
+            columns.addView(options, new LinearLayout.LayoutParams(0, -1, 1));
+            root.addView(columns, new LinearLayout.LayoutParams(-1, 0, 1));
+        }
+        details.addView(text("Phone address\n" + NetworkAddress.localIpv4(), 16, INK), spaced(4));
+        options.addView(button("Sound quality", v -> showPage("quality"), false), spaced(4));
+        options.addView(button("New code", v -> {
+            new AlertDialog.Builder(this).setTitle("Replace pairing code?")
+                    .setMessage("PC audio will stop. Enter the new code on your PC to reconnect.")
+                    .setNegativeButton("Cancel", null)
+                    .setPositiveButton("New code", (dialog, which) -> rotatePairingCode()).show();
+        }, false), spaced(4));
+        if (!isLandscape()) spacer();
+    }
+
+    private String displayCode() {
+        String code = PairingCode.display(currentPairingCode());
+        // Two groups per line remain readable with large accessibility text on a narrow phone.
+        return code.length() == 19 ? code.substring(0, 9) + "\n" + code.substring(10) : code;
+    }
+
+    private void buildQuality() {
+        int selected = prefs.getInt(WifiStreamService.PREF_LATENCY_PACKETS, 4);
+        addQuality("Fastest · 10 ms", 2, selected <= 2);
+        addQuality("Balanced · 20 ms", 4, selected > 2 && selected < 8);
+        addQuality("Reliable · 40 ms", 8, selected >= 8);
+        spacer();
+    }
+
+    private void addQuality(String label, int packets, boolean selected) {
+        Button option = button(label, v -> {
+            prefs.edit().putInt(WifiStreamService.PREF_LATENCY_PACKETS, packets).apply();
+            toast("Applies next time you start PC audio.");
+            showPage("options");
+        }, selected);
+        option.setSelected(selected);
+        root.addView(option, spaced(4));
+    }
+
+    private void buildMusicSetup() {
+        LinearLayout folderColumn = root;
+        LinearLayout options = root;
+        if (isLandscape()) {
+            LinearLayout columns = row();
+            folderColumn = column();
+            options = column();
+            columns.addView(folderColumn, new LinearLayout.LayoutParams(0, -1, 1));
+            gap(columns, 16);
+            columns.addView(options, new LinearLayout.LayoutParams(0, -1, 1));
+            root.addView(columns, new LinearLayout.LayoutParams(-1, 0, 1));
+        }
+        TextView folder = text(folderName(), 20, INK);
+        folder.setMaxLines(isLandscape() ? 1 : 2);
+        folder.setEllipsize(TextUtils.TruncateAt.MIDDLE);
+        folderColumn.addView(folder, spaced(4));
+        Button choose = button(isLandscape() ? "Folder" : "Choose folder", v -> chooseFolder(), true);
+        choose.setContentDescription("Choose folder");
+        folderColumn.addView(choose, spaced(4));
+        Button rescan = button(isLandscape() ? "Rescan" : "Rescan folder", v -> {
+            startPlayerAction(PlayerService.ACTION_PLAY);
+            showPage("home");
+        }, false);
+        rescan.setContentDescription("Rescan folder");
+        rescan.setEnabled(hasFolder());
+        folderColumn.addView(rescan, spaced(4));
+        CheckBox shuffle = new CheckBox(this);
+        shuffle.setText("Shuffle songs");
+        shuffle.setTextSize(18);
+        shuffle.setTextColor(INK);
+        shuffle.setMinHeight(dp(48));
+        shuffle.setChecked(prefs.getBoolean(PlayerService.PREF_SHUFFLE, false));
+        shuffle.setOnCheckedChangeListener((button, checked) -> {
+            prefs.edit().putBoolean(PlayerService.PREF_SHUFFLE, checked).apply();
+            if (hasPlayerSession()) startPlayerAction(PlayerService.ACTION_SET_SHUFFLE);
+        });
+        options.addView(shuffle, spaced(4));
+        if (!isLandscape()) spacer();
+        Button video = button(isLandscape() ? "Video audio" : "Get video audio", v -> showPage("extract"), false);
+        video.setContentDescription("Get video audio");
+        options.addView(video, spaced(4));
+    }
+
+    private void buildExtraction() {
+        extractionView = text(extractionText, 18, INK);
+        extractionView.setGravity(Gravity.CENTER_VERTICAL);
+        extractionView.setMaxLines(8);
+        extractionView.setEllipsize(TextUtils.TruncateAt.END);
+        extractionView.setOnClickListener(v -> new AlertDialog.Builder(this).setTitle("Video audio")
+                .setMessage(extractionText).setPositiveButton("Close", null).show());
+        root.addView(extractionView, new LinearLayout.LayoutParams(-1, 0, 1));
+        extractButton = button(hasFolder() ? "Get audio" : "Choose folder", v -> {
+            if (hasFolder()) startAudioExtraction();
+            else chooseFolder();
+        }, true);
+        extractButton.setEnabled(!extractionRunning);
+        root.addView(extractButton, spaced(4));
+    }
+
+    private void updatePlayback() {
+        if (!"home".equals(page) || titleView == null) return;
+        if (musicMode) {
+            boolean playing = playerState != null && playerState.getBooleanExtra(PlayerService.EXTRA_IS_PLAYING, false);
+            boolean preparing = playerState != null && playerState.getBooleanExtra(PlayerService.EXTRA_PREPARING, false);
+            String status = playerState == null ? "" : nonEmpty(playerState.getStringExtra(PlayerService.EXTRA_STATE), "");
+            String track = playerState == null ? null : playerState.getStringExtra(PlayerService.EXTRA_TRACK_NAME);
+            int count = playerState == null ? 0 : playerState.getIntExtra(PlayerService.EXTRA_TRACK_COUNT, 0);
+            int index = playerState == null ? -1 : playerState.getIntExtra(PlayerService.EXTRA_TRACK_INDEX, -1);
+            boolean error = status.contains("failed") || status.contains("error") || status.startsWith("Could not")
+                    || status.startsWith("No supported") || status.startsWith("Folder scan") || status.startsWith("Bad ");
+            titleView.setText(error ? "Can't play audio" : nonEmpty(track, hasFolder() ? folderName() : "Choose your music"));
+            detailView.setText(error ? "Tap for details" : preparing ? "Loading…" : playing
+                    ? "Playing" + (count > 0 ? " · " + (index + 1) + " / " + count : "")
+                    : index >= 0 ? "Paused" : hasFolder() ? "Ready to play" : "Pick a folder to begin");
+            primaryButton.setText(!hasFolder() ? "Choose" : playing ? "Pause" : "Play");
+            primaryButton.setContentDescription(!hasFolder() ? "Choose music folder" : playing ? "Pause music" : "Play music");
+            primaryButton.setEnabled(!preparing);
+            previousButton.setEnabled(count > 0 && !preparing);
+            nextButton.setEnabled(count > 0 && !preparing);
+            stopButton.setEnabled(hasPlayerSession() || preparing);
+        } else {
+            boolean connected = wifiState != null && wifiState.getBooleanExtra(WifiStreamService.EXTRA_CONNECTED, false);
+            String status = wifiState == null ? "" : nonEmpty(wifiState.getStringExtra(WifiStreamService.EXTRA_STATUS), "");
+            boolean error = status.contains("failed") || status.contains("invalid");
+            titleView.setText(error ? "Can't connect" : connected ? "Playing PC audio" : isWifiRunning() ? "Waiting for PC" : "PC audio");
+            detailView.setText(error ? "Tap for details" : connected
+                    ? nonEmpty(wifiState.getStringExtra(WifiStreamService.EXTRA_SENDER), "Connected")
+                    : isWifiRunning() ? "Use Connect PC for setup" : "Ready to connect");
+            primaryButton.setText(isWifiRunning() ? "Stop" : "Start");
+            primaryButton.setContentDescription(isWifiRunning() ? "Stop PC audio" : "Start PC audio");
+        }
+    }
+
+    private void showDetails() {
+        String detail;
+        if (musicMode) {
+            String track = playerState == null ? null : playerState.getStringExtra(PlayerService.EXTRA_TRACK_NAME);
+            String status = playerState == null ? null : playerState.getStringExtra(PlayerService.EXTRA_STATE);
+            detail = nonEmpty(track, folderName()) + "\n\n" + nonEmpty(status, "Ready to play");
+        } else {
+            detail = wifiState == null ? "Tap Start, then open NoFocus on your PC." : wifiState.getStringExtra(WifiStreamService.EXTRA_STATUS);
+        }
+        new AlertDialog.Builder(this).setTitle(musicMode ? "Music" : "PC audio")
+                .setMessage(detail).setPositiveButton("Close", null).show();
+    }
+
+    private boolean hasPlayerSession() {
+        return playerState != null && (playerState.getBooleanExtra(PlayerService.EXTRA_ACTIVE, false)
+                || playerState.getIntExtra(PlayerService.EXTRA_TRACK_COUNT, 0) > 0
+                || playerState.getBooleanExtra(PlayerService.EXTRA_PREPARING, false));
+    }
+
+    private boolean isWifiRunning() {
+        return wifiState != null && wifiState.getBooleanExtra(WifiStreamService.EXTRA_RUNNING, false);
+    }
+
+    private LinearLayout column() {
+        LinearLayout result = new LinearLayout(this);
+        result.setOrientation(LinearLayout.VERTICAL);
+        return result;
+    }
+
+    private LinearLayout row() {
+        LinearLayout result = new LinearLayout(this);
+        result.setOrientation(LinearLayout.HORIZONTAL);
+        result.setGravity(Gravity.CENTER_VERTICAL);
+        return result;
+    }
+
+    private TextView text(String value, int size, int color) {
+        TextView view = new TextView(this);
+        view.setText(value);
+        view.setTextSize(size);
+        view.setTextColor(color);
+        view.setFontFeatureSettings("kern");
+        return view;
+    }
+
+    private int fontPadding(TextView text) {
+        android.graphics.Paint.FontMetricsInt metrics = text.getPaint().getFontMetricsInt();
+        return metrics.bottom - metrics.descent + metrics.ascent - metrics.top;
+    }
+
+    private Button button(String label, View.OnClickListener click, boolean primary) {
         Button button = new Button(this);
-        button.setText(text);
-        button.setOnClickListener(listener);
-
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                LinearLayout.LayoutParams.WRAP_CONTENT
-        );
-        params.setMargins(0, dp(6), 0, dp(6));
-        button.setLayoutParams(params);
+        button.setText(label);
+        button.setTextSize(18);
+        button.setTextColor(primary ? Color.WHITE : ACCENT);
+        button.setAllCaps(false);
+        button.setTypeface(null, Typeface.BOLD);
+        button.setMinHeight(dp(48));
+        button.setMinimumHeight(dp(48));
+        button.setMinWidth(0);
+        button.setMinimumWidth(0);
+        button.setPadding(dp(8), 0, dp(8), 0);
+        button.setBackgroundTintList(null);
+        button.setBackground(buttonBackground(primary));
+        button.setOnClickListener(click);
+        button.setLayoutParams(fullWidth());
         return button;
     }
 
-    private View createDivider(int topMargin, int bottomMargin) {
-        View divider = new View(this);
-        divider.setBackgroundColor(Color.parseColor("#EEEEEE"));
-        LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT,
-                dp(1)
-        );
-        params.setMargins(0, topMargin, 0, bottomMargin);
-        divider.setLayoutParams(params);
-        return divider;
+    private RippleDrawable buttonBackground(boolean primary) {
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
+                new int[]{Color.rgb(226, 232, 230), primary ? ACCENT : TINT}));
+        shape.setCornerRadius(dp(16));
+        return new RippleDrawable(ColorStateList.valueOf(Color.argb(50, 130, 180, 165)), shape, null);
+    }
+
+    private ImageButton skipButton(String label, int icon, String action) {
+        ImageButton button = new ImageButton(this);
+        button.setImageResource(icon);
+        button.setImageTintList(new ColorStateList(new int[][]{new int[]{-android.R.attr.state_enabled}, new int[]{}},
+                new int[]{MUTED, ACCENT}));
+        button.setContentDescription(label);
+        button.setBackground(buttonBackground(false));
+        button.setOnClickListener(v -> startPlayerAction(action));
+        return button;
+    }
+
+    private void gap(LinearLayout row, int width) {
+        row.addView(new View(this), new LinearLayout.LayoutParams(dp(width), 1));
+    }
+
+    private void spacer() {
+        root.addView(new View(this), new LinearLayout.LayoutParams(1, 0, 1));
+    }
+
+    private LinearLayout.LayoutParams spaced(int top) {
+        LinearLayout.LayoutParams params = fullWidth();
+        params.topMargin = dp(top);
+        return params;
+    }
+
+    private LinearLayout.LayoutParams fullWidth() {
+        return new LinearLayout.LayoutParams(-1, -2);
+    }
+
+    private LinearLayout.LayoutParams weighted(int height) {
+        return new LinearLayout.LayoutParams(0, dp(height), 1);
+    }
+
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
+    private boolean isLandscape() {
+        return getResources().getConfiguration().orientation == Configuration.ORIENTATION_LANDSCAPE;
     }
 
     private void chooseFolder() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
-        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
-        intent.addFlags(Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+        intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
         startActivityForResult(intent, REQUEST_TREE);
     }
 
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        if (requestCode != REQUEST_TREE || resultCode != RESULT_OK || data == null || data.getData() == null) {
-            return;
-        }
-
-        Uri treeUri = data.getData();
+        if (requestCode != REQUEST_TREE || resultCode != RESULT_OK || data == null || data.getData() == null) return;
+        Uri tree = data.getData();
         int takeFlags = data.getFlags() & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
-        if (takeFlags == 0) {
-            takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
-        }
+        if (takeFlags == 0) takeFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION;
         try {
-            getContentResolver().takePersistableUriPermission(treeUri, takeFlags);
+            getContentResolver().takePersistableUriPermission(tree, takeFlags);
         } catch (SecurityException e) {
-            toast("Could not persist folder access: " + e.getMessage());
+            toast("Could not keep folder access. Choose it again next time.");
         }
-
-        prefs.edit().putString(PlayerService.PREF_TREE_URI, treeUri.toString()).apply();
-        updateFolderText();
-        startPlayerAction(PlayerService.ACTION_PLAY);
+        prefs.edit().putString(PlayerService.PREF_TREE_URI, tree.toString()).apply();
+        if ("extract".equals(page)) {
+            buildUi();
+        } else {
+            musicMode = true;
+            prefs.edit().putBoolean(PREF_MODE, true).apply();
+            showPage("home");
+            startPlayerAction(PlayerService.ACTION_PLAY);
+        }
     }
 
     private void startAudioExtraction() {
-        if (extractionRunning) {
-            toast("Extraction is already running.");
-            return;
-        }
-
-        final String tree = prefs.getString(PlayerService.PREF_TREE_URI, null);
-        if (tree == null) {
-            toast("Choose a folder first.");
-            return;
-        }
+        if (extractionRunning) return;
+        String tree = prefs.getString(PlayerService.PREF_TREE_URI, null);
         if (!hasPersistedWriteAccess(tree)) {
-            setExtractionText("Choose the folder again to grant write access.");
-            toast("Choose the folder again before extracting.");
+            setExtractionText("Choose the folder again to allow saving audio.");
+            chooseFolder();
             return;
         }
-
         extractionRunning = true;
-        if (extractButton != null) {
-            extractButton.setEnabled(false);
-        }
-        setExtractionText("Preparing...");
-
-        extractionExecutor.execute(new Runnable() {
-            @Override
-            public void run() {
-                VideoAudioExtractor extractor = new VideoAudioExtractor(MainActivity.this);
-                final VideoAudioExtractor.Result result = extractor.extract(tree, new VideoAudioExtractor.Callback() {
-                    @Override
-                    public void onStatus(final String status) {
-                        mainHandler.post(new Runnable() {
-                            @Override
-                            public void run() {
-                                setExtractionText(status);
-                            }
-                        });
-                    }
-                });
-
-                mainHandler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        extractionRunning = false;
-                        if (extractButton != null) {
-                            extractButton.setEnabled(true);
-                        }
-                        setExtractionText(result.detailText());
-                        if (result.hasPlayableOutput()) {
-                            startPlayerAction(PlayerService.ACTION_PLAY);
-                        }
-                    }
-                });
-            }
+        if (extractButton != null) extractButton.setEnabled(false);
+        setExtractionText("Getting audio…");
+        extractionExecutor.execute(() -> {
+            VideoAudioExtractor.Result result = new VideoAudioExtractor(this).extract(tree,
+                    status -> mainHandler.post(() -> setExtractionText(status)));
+            mainHandler.post(() -> {
+                if (isDestroyed()) return;
+                extractionRunning = false;
+                if (extractButton != null) extractButton.setEnabled(true);
+                setExtractionText(result.detailText());
+                if (result.hasPlayableOutput()) startPlayerAction(PlayerService.ACTION_PLAY);
+            });
         });
     }
 
     private void setExtractionText(String text) {
-        if (extractionView != null) {
-            extractionView.setText(text);
-        }
+        extractionText = text;
+        if (extractionView != null) extractionView.setText(text);
     }
 
     private void startPlayerAction(String action) {
-        if (PlayerService.ACTION_PLAY.equals(action)) {
-            stopService(new Intent(this, WifiStreamService.class));
-            if (wifiStatusView != null) {
-                wifiStatusView.setText("Stopped");
-            }
+        boolean transport = PlayerService.ACTION_PLAY.equals(action) || PlayerService.ACTION_TOGGLE_PLAY_PAUSE.equals(action)
+                || PlayerService.ACTION_NEXT.equals(action) || PlayerService.ACTION_PREVIOUS.equals(action);
+        if (transport) {
+            if (!hasFolder()) { chooseFolder(); return; }
+            startWifiAction(WifiStreamService.ACTION_STOP);
         }
-        Intent intent = new Intent(this, PlayerService.class);
-        intent.setAction(action);
-        String tree = prefs.getString(PlayerService.PREF_TREE_URI, null);
-        if (tree != null) {
-            intent.putExtra(PlayerService.EXTRA_TREE_URI, tree);
-        }
-        intent.putExtra(PlayerService.EXTRA_SHUFFLE, shuffleCheck != null && shuffleCheck.isChecked());
-        if (volumeSeek != null) {
-            intent.putExtra(PlayerService.EXTRA_VOLUME, Math.max(0f, Math.min(1f, volumeSeek.getProgress() / 100f)));
-        }
-
-        if (PlayerService.ACTION_STOP.equals(action)) {
-            startService(intent);
-        } else if (Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
+        Intent intent = new Intent(this, PlayerService.class).setAction(action);
+        intent.putExtra(PlayerService.EXTRA_TREE_URI, prefs.getString(PlayerService.PREF_TREE_URI, null));
+        intent.putExtra(PlayerService.EXTRA_SHUFFLE, prefs.getBoolean(PlayerService.PREF_SHUFFLE, false));
+        intent.putExtra(PlayerService.EXTRA_VOLUME, prefs.getFloat(PlayerService.PREF_VOLUME, 1f));
+        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+        else startService(intent);
     }
 
     private void startWifiAction(String action) {
         if (WifiStreamService.ACTION_STOP.equals(action)) {
             stopService(new Intent(this, WifiStreamService.class));
-            if (wifiStatusView != null) {
-                wifiStatusView.setText("Stopped");
-            }
-            if (wifiStartButton != null) {
-                wifiStartButton.setText("Start Wi-Fi receiver");
-            }
+            wifiState = null;
+            updatePlayback();
             return;
         }
-        if (WifiStreamService.ACTION_START.equals(action) && !hasLocalNetworkPermission()) {
-            requestNetworkPermissionIfNeeded();
-            toast("Allow nearby/local network access, then start the receiver again.");
-            return;
+        if (WifiStreamService.ACTION_START.equals(action)) {
+            if (!hasLocalNetworkPermission()) {
+                pendingWifiStart = true;
+                requestPermissions(new String[]{networkPermission()}, REQUEST_NETWORK);
+                return;
+            }
+            stopFolderPlayback();
         }
         Intent intent = new Intent(this, WifiStreamService.class).setAction(action);
-        if (wifiVolumeSeek != null) {
-            intent.putExtra("volume", wifiVolumeSeek.getProgress() / 100f);
-        }
-        if (WifiStreamService.ACTION_START.equals(action) && Build.VERSION.SDK_INT >= 26) {
-            startForegroundService(intent);
-        } else {
-            startService(intent);
-        }
+        intent.putExtra("volume", prefs.getFloat(WifiStreamService.PREF_STREAM_VOLUME, 1f));
+        if (WifiStreamService.ACTION_START.equals(action) && Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+        else startService(intent);
     }
 
     private void stopFolderPlayback() {
         stopService(new Intent(this, PlayerService.class));
-        if (statusView != null) {
-            statusView.setText("Stopped");
-        }
-        if (playPauseButton != null) {
-            playPauseButton.setText("Play");
-        }
+        playerState = null;
+        updatePlayback();
     }
 
     private void ensurePairingCode() {
@@ -679,10 +761,8 @@ public class MainActivity extends Activity {
 
     private void rotatePairingCode() {
         startWifiAction(WifiStreamService.ACTION_STOP);
-        String code = PairingCode.generate();
-        prefs.edit().putString(WifiStreamService.PREF_PAIRING_CODE, code).apply();
-        wifiCodeView.setText("Pairing code: " + PairingCode.display(code));
-        toast("Pairing code rotated. Update the sender command.");
+        prefs.edit().putString(WifiStreamService.PREF_PAIRING_CODE, PairingCode.generate()).apply();
+        showPage("setup");
     }
 
     private void copyWifiSetup() {
@@ -690,8 +770,8 @@ public class MainActivity extends Activity {
                 + "&code=" + PairingCode.display(currentPairingCode());
         ClipboardManager clipboard = (ClipboardManager) getSystemService(Context.CLIPBOARD_SERVICE);
         if (clipboard != null) {
-            clipboard.setPrimaryClip(ClipData.newPlainText("NoFocus sender setup", setup));
-            toast("PC setup copied. Paste it into NoFocus PC Speaker.");
+            clipboard.setPrimaryClip(ClipData.newPlainText("NoFocus PC setup", setup));
+            toast("Copied. Use Paste phone setup on your PC.");
         }
     }
 
@@ -700,71 +780,45 @@ public class MainActivity extends Activity {
     }
 
     private boolean hasPersistedWriteAccess(String tree) {
-        if (tree == null) {
-            return false;
-        }
         for (UriPermission permission : getContentResolver().getPersistedUriPermissions()) {
-            if (tree.equals(permission.getUri().toString()) && permission.isWritePermission()) {
-                return true;
-            }
+            if (tree != null && tree.equals(permission.getUri().toString()) && permission.isWritePermission()) return true;
         }
         return false;
     }
 
-    private void updateFolderText() {
+    private String folderName() {
         String tree = prefs.getString(PlayerService.PREF_TREE_URI, null);
-        if (tree == null) {
-            folderView.setText("Not selected");
-            folderView.setTextColor(Color.parseColor("#888888"));
-            return;
-        }
-        String display = tree;
+        if (tree == null) return "No folder chosen";
         try {
-            display = DocumentsContract.getTreeDocumentId(Uri.parse(tree));
+            String id = DocumentsContract.getTreeDocumentId(Uri.parse(tree));
+            return id.substring(Math.max(id.lastIndexOf('/'), id.lastIndexOf(':')) + 1);
         } catch (Exception ignored) {
-            // Keep the URI string.
+            return "Music folder";
         }
-        folderView.setText(display);
-        folderView.setTextColor(Color.parseColor("#222222"));
     }
 
     private void requestNotificationPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT >= 33
-                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NETWORK);
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, REQUEST_NOTIFICATIONS);
         }
     }
 
-    private void requestNetworkPermissionIfNeeded() {
-        if (Build.VERSION.SDK_INT < 36) {
-            return;
-        }
-        String networkPermission = Build.VERSION.SDK_INT >= 37
-                ? ACCESS_LOCAL_NETWORK : Manifest.permission.NEARBY_WIFI_DEVICES;
-        if (checkSelfPermission(networkPermission) != PackageManager.PERMISSION_GRANTED) {
-            requestPermissions(new String[]{networkPermission}, REQUEST_NETWORK);
-        }
+    @SuppressLint("InlinedApi") // Requested only on API 36+ by hasLocalNetworkPermission().
+    private String networkPermission() {
+        return Build.VERSION.SDK_INT >= 37 ? ACCESS_LOCAL_NETWORK : Manifest.permission.NEARBY_WIFI_DEVICES;
     }
 
     private boolean hasLocalNetworkPermission() {
-        if (Build.VERSION.SDK_INT < 36) {
-            return true;
+        return Build.VERSION.SDK_INT < 36 || checkSelfPermission(networkPermission()) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    @Override public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
+        super.onRequestPermissionsResult(requestCode, permissions, results);
+        if (requestCode == REQUEST_NETWORK && pendingWifiStart) {
+            pendingWifiStart = false;
+            if (results.length > 0 && results[0] == PackageManager.PERMISSION_GRANTED) startWifiAction(WifiStreamService.ACTION_START);
+            else toast("Allow nearby devices in Settings to connect your PC.");
         }
-        String permission = Build.VERSION.SDK_INT >= 37
-                ? ACCESS_LOCAL_NETWORK : Manifest.permission.NEARBY_WIFI_DEVICES;
-        return checkSelfPermission(permission) == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private LinearLayout.LayoutParams fullWidth() {
-        return new LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
-    }
-
-    private LinearLayout.LayoutParams weighted() {
-        return new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
-    }
-
-    private int dp(int value) {
-        return Math.round(value * getResources().getDisplayMetrics().density);
     }
 
     private void toast(String text) {

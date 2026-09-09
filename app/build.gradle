@@ -12,6 +12,7 @@ android {
         targetSdk = 36
         versionCode = 3
         versionName = '1.2.0'
+        testInstrumentationRunner = 'dev.nofocus.folderplayer.CompactUiTest'
     }
 
     testOptions {
