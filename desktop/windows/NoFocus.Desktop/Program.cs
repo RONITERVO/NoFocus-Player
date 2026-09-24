@@ -8,8 +8,24 @@ internal static class Program
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
         {
             Protocol.SelfTest();
-            Console.WriteLine("Protocol self-test passed.");
+            SongDownload.SelfTest();
+            Console.WriteLine("Protocol and downloader self-tests passed.");
             return 0;
+        }
+
+        if (args.Contains("--download-youtube", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                using CancellationTokenSource cancel = new();
+                Console.CancelKeyPress += (_, e) => { e.Cancel = true; cancel.Cancel(); };
+                string result = SongDownload.RunAsync(ValueAfter(args, "--url") ?? "",
+                    ValueAfter(args, "--format") ?? "mp3", ValueAfter(args, "--output") ?? Environment.GetFolderPath(Environment.SpecialFolder.MyMusic),
+                    new Progress<string>(Console.WriteLine), cancel.Token).GetAwaiter().GetResult();
+                Console.WriteLine(result);
+                return 0;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
         }
 
         if (args.Contains("--discover", StringComparer.OrdinalIgnoreCase))

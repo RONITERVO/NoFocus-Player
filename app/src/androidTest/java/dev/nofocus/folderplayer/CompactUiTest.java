@@ -20,22 +20,46 @@ public final class CompactUiTest extends Instrumentation {
     private int screens;
     private String screen;
     private boolean landscape;
+    private Bundle arguments;
 
     @Override public void onCreate(Bundle arguments) {
         super.onCreate(arguments);
+        this.arguments = arguments;
         landscape = arguments != null && "landscape".equals(arguments.getString("orientation"));
         start();
     }
 
     @Override public void onStart() {
+        if (arguments != null && "true".equals(arguments.getString("downloads"))) {
+            Bundle result = new Bundle();
+            try {
+                DownloadRuntimeTest.run(this, arguments);
+                result.putString(REPORT_KEY_STREAMRESULT, "\nPASS: Android download runtime, formats, cancellation and file provider.\n");
+                finish(Activity.RESULT_OK, result);
+            } catch (Throwable error) {
+                android.util.Log.e("DownloadRuntimeTest", "Failed", error);
+                result.putString(REPORT_KEY_STREAMRESULT, "\nFAIL: " + error + "\n");
+                finish(Activity.RESULT_CANCELED, result);
+            }
+            return;
+        }
         Bundle result = new Bundle();
         SharedPreferences prefs = getTargetContext().getSharedPreferences(PlayerService.PREFS, 0);
+        SharedPreferences downloadPrefs = getTargetContext().getSharedPreferences(SongDownloadService.PREFS, 0);
+        boolean hadFormat = downloadPrefs.contains("format");
+        int originalFormat = downloadPrefs.getInt("format", 0);
         boolean originalMode = prefs.getBoolean("ui_music_mode", false);
         String originalFolder = prefs.getString(PlayerService.PREF_TREE_URI, null);
         int resultCode = Activity.RESULT_OK;
         try {
+            ActivityMonitor launches = addMonitor(MainActivity.class.getName(), null, false);
             activity = startActivitySync(new Intent(getTargetContext(), MainActivity.class)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            // Some launchers stay in portrait, so a locked landscape display rotates during launch.
+            android.os.SystemClock.sleep(700);
+            waitForIdleSync();
+            if (launches.getLastActivity() != null) activity = launches.getLastActivity();
+            removeMonitor(launches);
             if (landscape) {
                 // Start with the display already rotated; requesting orientation here would recreate the Activity.
                 if (activity.getResources().getConfiguration().orientation != android.content.res.Configuration.ORIENTATION_LANDSCAPE) {
@@ -62,8 +86,38 @@ public final class CompactUiTest extends Instrumentation {
             check("Music home");
             click("Setup");
             check("Music setup");
+            click("Add music");
+            check("Add music");
+            Activity main = activity;
+            downloadPrefs.edit().putInt("format", 0).commit();
+            activity = startActivitySync(new Intent(getTargetContext(), SongDownloadActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            check("Download song");
+            click("MP3 ▾");
+            check("Download format choices");
+            click("M4A · smaller file");
+            requireText("M4A ▾");
+            click("M4A ▾");
+            click("MP3 · most apps");
+            java.lang.reflect.Field downloadState = SongDownloadService.class.getDeclaredField("state");
+            downloadState.setAccessible(true);
+            Object previousDownload = downloadState.get(null);
+            java.lang.reflect.Method showDownload = SongDownloadActivity.class.getDeclaredMethod("showState");
+            showDownload.setAccessible(true);
+            try {
+                for (SongDownloadService.State sample : new SongDownloadService.State[]{
+                        new SongDownloadService.State(true, "Downloading 75.4%", ""),
+                        new SongDownloadService.State(false, "YouTube needs sign-in. Try another public song.", ""),
+                        new SongDownloadService.State(false, "Ready to save", "A very long song title that should never move controls off the screen.mp3")}) {
+                    downloadState.set(null, sample);
+                    onMain(() -> { try { showDownload.invoke(activity); } catch (Exception error) { throw new AssertionError(error); } });
+                    check("Download: " + sample.message);
+                }
+            } finally { downloadState.set(null, previousDownload); }
+            runOnMainSync(() -> activity.finish());
+            activity = main;
             click("Get video audio");
             check("Video audio");
+            click("Back");
             click("Back");
             click("Back");
             // A harmless URI enables transport labels on fresh installs; no service opens it.
@@ -103,6 +157,8 @@ public final class CompactUiTest extends Instrumentation {
             result.putString(REPORT_KEY_STREAMRESULT, "\nFAIL: " + screen + ": " + error + "\n");
             resultCode = Activity.RESULT_CANCELED;
         } finally {
+            if (hadFormat) downloadPrefs.edit().putInt("format", originalFormat).commit();
+            else downloadPrefs.edit().remove("format").commit();
             SharedPreferences.Editor restore = prefs.edit().putBoolean("ui_music_mode", originalMode);
             if (originalFolder == null) restore.remove(PlayerService.PREF_TREE_URI);
             else restore.putString(PlayerService.PREF_TREE_URI, originalFolder);

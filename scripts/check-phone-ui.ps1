@@ -15,6 +15,7 @@ $originalDensity = if ($density -match 'Override density: (\d+)') { $Matches[1] 
 $originalFont = Invoke-Adb shell settings get system font_scale
 $originalRotation = Invoke-Adb shell settings get system user_rotation
 $originalAutoRotate = Invoke-Adb shell settings get system accelerometer_rotation
+$originalFixedRotation = Invoke-Adb shell wm fixed-to-user-rotation
 $runner = 'dev.nofocus.folderplayer.test/dev.nofocus.folderplayer.CompactUiTest'
 
 function Test-Layout([string]$Name, [bool]$Landscape = $false) {
@@ -26,6 +27,8 @@ function Test-Layout([string]$Name, [bool]$Landscape = $false) {
 
 try {
     Test-Layout 'Original display'
+    # Also rotate on emulators whose system overlays request SCREEN_ORIENTATION_NOSENSOR.
+    Invoke-Adb shell wm fixed-to-user-rotation enabled | Out-Null
     Invoke-Adb shell wm size 640x960 | Out-Null
     Invoke-Adb shell wm density 320 | Out-Null
     foreach ($scale in @('1.0', '1.5', '2.0')) {
@@ -42,4 +45,5 @@ try {
     else { Invoke-Adb shell settings put system font_scale $originalFont | Out-Null }
     Invoke-Adb shell wm user-rotation lock $originalRotation | Out-Null
     Invoke-Adb shell settings put system accelerometer_rotation $originalAutoRotate | Out-Null
+    Invoke-Adb shell wm fixed-to-user-rotation $originalFixedRotation | Out-Null
 }

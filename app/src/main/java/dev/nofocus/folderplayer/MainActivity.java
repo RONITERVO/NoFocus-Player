@@ -154,7 +154,8 @@ public class MainActivity extends Activity {
 
     @Override public void onBackPressed() {
         if (!"home".equals(page)) {
-            showPage("quality".equals(page) ? "options" : "extract".equals(page) || "options".equals(page) ? "setup" : "home");
+            showPage("quality".equals(page) ? "options" : "extract".equals(page) ? "add"
+                    : "add".equals(page) || "options".equals(page) ? "setup" : "home");
         } else {
             super.onBackPressed();
         }
@@ -191,11 +192,15 @@ public class MainActivity extends Activity {
         if ("home".equals(page)) {
             buildHome();
         } else {
-            buildHeader("quality".equals(page) ? "Sound quality" : "extract".equals(page)
+            buildHeader("add".equals(page) ? "Add music" : "quality".equals(page) ? "Sound quality" : "extract".equals(page)
                     ? "Video audio" : "options".equals(page) ? "PC options" : musicMode ? "Music setup" : "PC setup", true);
             if ("quality".equals(page)) buildQuality();
             else if ("options".equals(page)) buildWifiOptions();
             else if ("extract".equals(page)) buildExtraction();
+            else if ("add".equals(page)) {
+                root.addView(button("Download song", v -> startActivity(new Intent(this, SongDownloadActivity.class)), true), spaced(8));
+                root.addView(button("Get video audio", v -> showPage("extract"), false), spaced(8));
+            }
             else if (musicMode) buildMusicSetup();
             else buildWifiSetup();
         }
@@ -476,8 +481,7 @@ public class MainActivity extends Activity {
         });
         options.addView(shuffle, spaced(4));
         if (!isLandscape()) spacer();
-        Button video = button(isLandscape() ? "Video audio" : "Get video audio", v -> showPage("extract"), false);
-        video.setContentDescription("Get video audio");
+        Button video = button("Add music", v -> showPage("add"), false);
         options.addView(video, spaced(4));
     }
 
