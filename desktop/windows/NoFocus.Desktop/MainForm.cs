@@ -60,7 +60,7 @@ internal sealed class MainForm : Form
         Panel card = NewCard(new Rectangle(38, 128, 564, 356));
         Controls.Add(card);
 
-        Label step1 = NewLabel("1   On the phone, tap Start Wi-Fi receiver", 12, FontStyle.Bold,
+        Label step1 = NewLabel("1   On the phone: PC audio → Start", 12, FontStyle.Bold,
             Color.FromArgb(28, 35, 45));
         step1.SetBounds(28, 22, 500, 30);
         card.Controls.Add(step1);
@@ -84,7 +84,7 @@ internal sealed class MainForm : Form
         addressBox.SetBounds(30, 125, 492, 38);
         card.Controls.Add(addressBox);
 
-        Label step2 = NewLabel("2   Enter the pairing code shown on the phone", 12, FontStyle.Bold,
+        Label step2 = NewLabel("2   Tap Connect PC on the phone for the code", 12, FontStyle.Bold,
             Color.FromArgb(28, 35, 45));
         step2.SetBounds(28, 184, 500, 30);
         card.Controls.Add(step2);
@@ -104,10 +104,11 @@ internal sealed class MainForm : Form
         pasteButton.Click += (_, _) => PasteSetup();
         card.Controls.Add(pasteButton);
 
-        Label privacy = NewLabel("The code is encrypted with your Windows account and remembered on this PC.", 9,
-            FontStyle.Regular, Color.FromArgb(100, 109, 121));
-        privacy.SetBounds(30, 275, 500, 42);
-        card.Controls.Add(privacy);
+        Button download = new() { Text = "Download song" };
+        StyleSecondaryButton(download);
+        download.SetBounds(30, 286, 492, 44);
+        download.Click += (_, _) => { using DownloadForm form = new(); form.ShowDialog(this); };
+        card.Controls.Add(download);
 
         Panel statusCard = NewCard(new Rectangle(38, 502, 564, 70));
         Controls.Add(statusCard);

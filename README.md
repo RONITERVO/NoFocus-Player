@@ -56,12 +56,33 @@ Audio is sent directly over the local network on UDP port `39821`; there is no c
 ## Folder player
 
 1. Select **My music**, tap **Folder** (or **Choose** on first use), and select `Music` or one of its subfolders. Playback starts automatically.
-2. Use **Play / Pause**, **Previous / Next**, **Stop**, and **Volume** on the same screen. Open **Setup** for shuffle, choosing or rescanning a folder, and **Get video audio**. The extractor copies supported source audio into an audio-only container without lossy re-encoding.
+2. Use **Play / Pause**, **Previous / Next**, **Stop**, and **Volume** on the same screen. Open **Setup** for shuffle, choosing or rescanning a folder, and **Add music**. **Add music → Get video audio** copies supported audio from local videos without lossy re-encoding.
 3. Open YouTube or another app; music keeps playing. Return to NoFocus to see the current playback state.
 
 Android 11 and newer may prevent selecting the storage root or `Download` directly. Common MP3, M4A, AAC, FLAC, Ogg/Opus, WebM, WAV, 3GP, AMR, and MIDI files are supported.
 
 Starting either NoFocus source stops the other NoFocus source while unrelated apps keep playing.
+
+## Download a song
+
+Both apps download directly from YouTube, independently. Android does not need the PC online. Downloading does not stop music playback or PC audio streaming.
+
+* **Android 7 or newer:** **My music → Setup → Add music → Download song**. Paste a single YouTube or YouTube Music video link, choose a format, and tap **Download**. Then use **Save** to keep the file in a folder, or **Share** to send it to another app. For NoFocus playback, save into your chosen music folder and use **Rescan folder**. Only the latest export is kept in the app; save it before downloading another song.
+* **Windows:** **Download song**. Paste the link, choose a format and a folder, then **Download**. **Show file** opens its location; **Play** opens your default player. Existing files are preserved by adding a numbered suffix.
+
+| Format | Use |
+| --- | --- |
+| MP3 (default) | Broad compatibility, including most web apps |
+| M4A (AAC) | Smaller files; check the receiving app's supported formats |
+| WAV (PCM) | Editing and apps that request WAV; much larger files |
+
+These are real audio conversions. WAV does not improve the original YouTube audio quality. Upload the saved file using the other web app's normal file picker; nothing is uploaded automatically.
+
+Use single public videos under two hours, with source downloads capped at 500 MB. Playlists, live streams and sign-in-only videos are unsupported. YouTube changes can require an updated app. Download only material you are allowed to save.
+
+The Android APK bundles Python, yt-dlp, QuickJS and FFmpeg for independent downloads, so the universal APK is about 190 MiB. Android 6 retains folder playback and PC audio; song downloads require Android 7. Windows installs checksum-verified portable helpers into `%LOCALAPPDATA%/NoFocus Speaker/download-tools` on first use (internet and several hundred MB free space required). Neither device needs Python installed separately. Cancellation stops the converter and cleans incomplete job files. Android downloads and saving continue when you leave the screen; reopen it or use the notification to cancel.
+
+**PC to phone:** the existing **PC audio** mode streams whatever is playing on the PC, including a downloaded song. It does not copy the PC's music files to the phone. To keep a song on the phone, download it there and use **Save**.
 
 ## Compact phone interface
 
@@ -97,6 +118,19 @@ dotnet run --project desktop\windows\NoFocus.Desktop\NoFocus.Desktop.csproj -c R
 ```
 
 The one-file executable is written to `artifacts/windows-x64/NoFocus Speaker.exe`. Tagged GitHub builds and manual workflow runs are defined in `.github/workflows/release.yml`.
+
+Download checks (use an explicit Android emulator/phone serial):
+
+```powershell
+adb -s emulator-5580 shell am instrument -w -e downloads true dev.nofocus.folderplayer.test/dev.nofocus.folderplayer.CompactUiTest
+# Optional live YouTube check, in addition to offline format/cancellation checks:
+adb -s emulator-5580 shell am instrument -w -e downloads true -e url "https://www.youtube.com/watch?v=jNQXAC9IVRw" dev.nofocus.folderplayer.test/dev.nofocus.folderplayer.CompactUiTest
+dotnet run --project desktop/windows/NoFocus.Desktop/NoFocus.Desktop.csproj -c Release -- --download-youtube --url "https://www.youtube.com/watch?v=jNQXAC9IVRw" --format mp3 --output artifacts/download-test
+```
+
+The runtime test generates a one-second tone, converts all three formats with the bundled tools, checks the containers/duration, cancels an active process, and rejects content-provider path traversal. It uses an isolated cache directory and cleans it afterward. The optional live check depends on YouTube availability. Layout checks also cover download progress, long errors and completed results, including 200% text.
+
+Tool versions and SHA-256 checksums live in `download-tools.json`. Updating the Android runtime version or yt-dlp hash automatically selects a new private extraction directory. Review upstream license/source changes at the same time; notices are in [third-party/NOTICE.md](third-party/NOTICE.md). Native AARs supply only CLI payloads; the GPL Android wrapper is not linked. First builds require Maven Central and GitHub access. These apps do not use Visual-Music-Lyrics's server, authentication, cookies or secrets.
 
 The Python sender in `desktop_sender/` remains a developer and macOS/Linux fallback. Windows users should use the native one-click app.
 

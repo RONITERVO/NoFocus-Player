@@ -1,0 +1,29 @@
+{
+  "ytDlpVersion": "2026.08.19",
+  "androidRuntimeVersion": "0.18.1",
+  "androidArchives": {
+    "library": "579b5fb480892b1abc2b218c2089699d52759cc8d7ba256bf876453f0365faef",
+    "ffmpeg": "0a87ffa6cf912b0fe76c1a99b9107f543ee2f247935fae2c71f0822eb7bc5f49"
+  },
+  "androidYtDlp": {
+    "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp",
+    "sha256": "1fa6733c37ea6fb51c99ad8fe785e7b7e5f3246c9b980230329d4fb72ed8d4d6"
+  },
+  "windows": [
+    {
+      "name": "yt-dlp", "version": "2026.08.19", "file": "yt-dlp.exe",
+      "url": "https://github.com/yt-dlp/yt-dlp/releases/download/2026.08.19/yt-dlp.exe",
+      "sha256": "66674953fe251b89f4d08c5f0e35e0728679bd67ab3d7d05c0562af101dd3e7a"
+    },
+    {
+      "name": "deno", "version": "2.9.7", "file": "deno.exe",
+      "url": "https://github.com/denoland/deno/releases/download/v2.9.7/deno-x86_64-pc-windows-msvc.zip",
+      "sha256": "a0c3101b4158d1dfb7d6a78a7bf0f3de80c96bb423c152beec8beb22786f2238"
+    },
+    {
+      "name": "ffmpeg", "version": "9.0.2", "file": "ffmpeg.exe",
+      "url": "https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-essentials_build.zip",
+      "sha256": "60f467265b1e312373dbcd92200c2618a74850f98d3d078e94296bb3fa2047ba"
+    }
+  ]
+}
