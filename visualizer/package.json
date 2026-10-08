@@ -1,0 +1,6 @@
+{
+  "name": "nofocus-visual-music",
+  "private": true,
+  "scripts": { "build": "node build.cjs", "verify": "node verify.cjs" },
+  "devDependencies": { "esbuild": "0.25.12" }
+}

@@ -10,3 +10,6 @@ __pycache__/
 *.iml
 .DS_Store
 local.properties
+visualizer/node_modules/
+desktop_export/node_modules/
+desktop_export/.state/

@@ -200,6 +200,7 @@ public class MainActivity extends Activity {
             else if ("add".equals(page)) {
                 root.addView(button("Download song", v -> startActivity(new Intent(this, SongDownloadActivity.class)), true), spaced(8));
                 root.addView(button("Get video audio", v -> showPage("extract"), false), spaced(8));
+                root.addView(button("Capture lyrics video", v -> startActivity(new Intent(this, CaptureActivity.class)), false), spaced(8));
             }
             else if (musicMode) buildMusicSetup();
             else buildWifiSetup();
@@ -222,6 +223,9 @@ public class MainActivity extends Activity {
         heading.setEllipsize(TextUtils.TruncateAt.END);
         header.addView(heading, new LinearLayout.LayoutParams(0, -2, 1));
         if (!back) {
+            Button visuals = button("Visuals", v -> startActivity(new Intent(this, VisualMusicActivity.class)), false);
+            visuals.setContentDescription("Visual music");
+            header.addView(visuals, new LinearLayout.LayoutParams(-2, dp(48)));
             Button setup = button("Setup", v -> showPage("setup"), false);
             header.addView(setup, new LinearLayout.LayoutParams(-2, dp(48)));
         }

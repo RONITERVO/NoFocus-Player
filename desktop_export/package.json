@@ -1,0 +1,15 @@
+{
+  "name": "nofocus-export-companion",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Paired LAN rendering for NoFocus Visual Music",
+  "engines": { "node": ">=22" },
+  "scripts": { "start": "node server.cjs", "test": "node --test test.cjs" },
+  "dependencies": {
+    "esbuild": "0.25.12",
+    "playwright": "1.63.0",
+    "ffmpeg-static": "5.3.0",
+    "selfsigned": "5.5.0",
+    "qrcode": "1.5.4"
+  }
+}

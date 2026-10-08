@@ -30,6 +30,43 @@ public final class CompactUiTest extends Instrumentation {
     }
 
     @Override public void onStart() {
+        if (arguments != null && "true".equals(arguments.getString("pcExport"))) {
+            Bundle result = new Bundle();
+            try {
+                VisualMusicPcTest.run(this);
+                result.putString(REPORT_KEY_STREAMRESULT,"\nPASS: Pinned PC pairing, wrong-certificate rejection, source upload, PC rendering, durable job recovery, verified download, exact PCM and cancellation.\n");
+                finish(Activity.RESULT_OK,result);
+            } catch (Throwable error) {
+                android.util.Log.e("VisualMusicPcTest","Failed",error);
+                result.putString(REPORT_KEY_STREAMRESULT,"\nFAIL: " + error + "\n");finish(Activity.RESULT_CANCELED,result);
+            }
+            return;
+        }
+        if (arguments != null && "true".equals(arguments.getString("visualMusic"))) {
+            Bundle result = new Bundle();
+            try {
+                VisualMusicRuntimeTest.run(this, arguments.getString("theme", "sketchbook"));
+                result.putString(REPORT_KEY_STREAMRESULT, "\nPASS: Phone library, Gemini JSON, native float playback, lossless video pixel parity, exact PCM export and cancellation.\n");
+                finish(Activity.RESULT_OK, result);
+            } catch (Throwable error) {
+                android.util.Log.e("VisualMusicTest", "Failed", error);
+                result.putString(REPORT_KEY_STREAMRESULT, "\nFAIL: " + error + "\n"); finish(Activity.RESULT_CANCELED, result);
+            }
+            return;
+        }
+        if (arguments != null && "true".equals(arguments.getString("captureRuntime"))) {
+            Bundle result = new Bundle();
+            try {
+                CaptureRuntimeTest.run(this);
+                result.putString(REPORT_KEY_STREAMRESULT, "\nPASS: Capture master PCM/FLAC samples, alignment and Gemini muxing.\n");
+                finish(Activity.RESULT_OK, result);
+            } catch (Throwable error) {
+                android.util.Log.e("CaptureRuntimeTest", "Failed", error);
+                result.putString(REPORT_KEY_STREAMRESULT, "\nFAIL: " + error + "\n");
+                finish(Activity.RESULT_CANCELED, result);
+            }
+            return;
+        }
         if (arguments != null && "true".equals(arguments.getString("downloads"))) {
             Bundle result = new Bundle();
             try {

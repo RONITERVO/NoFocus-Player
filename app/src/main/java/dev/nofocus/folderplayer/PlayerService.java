@@ -119,6 +119,7 @@ public class PlayerService extends Service {
         ensureForeground(status);
 
         if (ACTION_PLAY.equals(action)) {
+            stopService(new Intent(this, VisualMusicPlayback.class));
             stopService(new Intent(this, WifiStreamService.class));
             String tree = intent.getStringExtra(EXTRA_TREE_URI);
             if (tree == null) {
@@ -307,6 +308,7 @@ public class PlayerService extends Service {
     }
 
     private void playIndex(int index) {
+        stopService(new Intent(this, VisualMusicPlayback.class));
         if (playlist.isEmpty()) {
             fail("Playlist is empty.");
             return;

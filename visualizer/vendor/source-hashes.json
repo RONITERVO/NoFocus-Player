@@ -1,0 +1,54 @@
+[
+  {
+    "path": "src/types.ts",
+    "sha256": "972b1d1eff7b6733010761bda0a33fd4cb62f3fe3d160e3484ef0ef410068614"
+  },
+  {
+    "path": "src/lib/utils.ts",
+    "sha256": "3b8d44f1172473776c9cac77806ec02b57c383dec4d269d93a48ba7d195727a5"
+  },
+  {
+    "path": "src/lib/parser.ts",
+    "sha256": "03a6de4df908401668237682c405b15403237cc25654533154eeae2f88757995"
+  },
+  {
+    "path": "src/lib/geminiImport.ts",
+    "sha256": "25d04f17419dea30867ef9a4d41f8b675b4c131ef18f91a97f62e3b34fbfe2b9"
+  },
+  {
+    "path": "src/lib/graphics/MusicLyricVisualizers.ts",
+    "sha256": "38d3bdc9882391ffd5dc64e8f7c54f6ca49a8deb9bea71cfcd21fa15eb606ea4"
+  },
+  {
+    "path": "src/lib/graphics/MusicLyricVisualizer.ts",
+    "sha256": "f035960dbfaa82a816da755805e9848f7b38b4841d3c175fed54d04ceb3caee5"
+  },
+  {
+    "path": "src/lib/graphics/MusicLyricSignalBloomVisualizer.ts",
+    "sha256": "48a3501b5b3820c1be2a7b1888dc43d1dbead74369f043922266f18f2e5cf81a"
+  },
+  {
+    "path": "src/lib/graphics/MusicLyricReactivity.ts",
+    "sha256": "f7e3f80fb96c70db679b26946c12a0b2cdc210a3480b3a8d5795eebda1dacc63"
+  },
+  {
+    "path": "src/lib/graphics/MusicLyricsTiming.ts",
+    "sha256": "4e735e8a6a364ffe804495c05e4796cd76850c849203fa9ea675e515bea1d0fd"
+  },
+  {
+    "path": "src/lib/video/VideoRenderer.ts",
+    "sha256": "66d080235778b3e3c2fbd1a4eb9573ac8238e149b4489b8a9f87a84103c02a38"
+  },
+  {
+    "path": "src/lib/video/OfflineSpectrum.ts",
+    "sha256": "825653a80314a534550f5eaf8df7d741ed6beba8d4236b8082dd467cd370a72b"
+  },
+  {
+    "path": "src/assets/prompts/gemini-suno-word-timings.txt",
+    "sha256": "7f5d8467ef333d479cf9b8b1183c643dd6b8110deb8abfa7611cd7fa1f0180f0"
+  },
+  {
+    "path": "LICENSE",
+    "sha256": "1eb85fc97224598dad1852b5d6483bbcf0aa8608790dcc657a5a2a761ae9c8c6"
+  }
+]
