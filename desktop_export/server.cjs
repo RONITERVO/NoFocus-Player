@@ -7,13 +7,12 @@ const https = require('node:https');
 const http = require('node:http');
 const crypto = require('node:crypto');
 const { spawn } = require('node:child_process');
-const { once } = require('node:events');
 const { pipeline } = require('node:stream/promises');
 const { Transform } = require('node:stream');
+const { WebSocketServer } = require('ws');
 const rendererVersion = require('../visualizer/version.cjs');
 const MB = 1024 * 1024, RETENTION = 24 * 60 * 60 * 1000;
 const UUID = /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/;
-const digest = buffer => crypto.createHash('sha256').update(buffer).digest('hex');
 const equal = (a, b) => typeof a === 'string' && typeof b === 'string' && Buffer.byteLength(a) === Buffer.byteLength(b) && crypto.timingSafeEqual(Buffer.from(a), Buffer.from(b));
 function fail(message, status = 400) { const error = new Error(message); error.status = status; throw error; }
 function validate(config) {
@@ -69,43 +68,41 @@ async function start(options = {}) {
   const script = (await require('esbuild').build({entryPoints:[path.join(__dirname,'renderer.ts')],bundle:true,write:false,format:'iife',target:'chrome100'})).outputFiles[0].contents;
   const jobs = new Map(); let running = null, closing = false;
   const directory = id => path.join(jobsRoot, id);
-  const save = job => atomic(path.join(directory(job.id),'job.json'), {id:job.id, config:job.config, status:job.status, frames:job.frames, total:job.total, extension:job.extension, error:job.error || '', created:job.created, updated:Date.now()});
-  const view = job => ({id:job.id,status:job.status,frames:job.frames,total:job.total,extension:job.extension,error:job.error || '',title:job.config.title});
+  const save = job => {
+    job.updated = Date.now();
+    const snapshot = {id:job.id,config:job.config,status:job.status,frames:job.frames,total:job.total,extension:job.extension,error:job.error || '',created:job.created,updated:job.updated,queuedAt:job.queuedAt,started:job.started,timings:job.timings,encoder:job.encoder};
+    job.saving = (job.saving || Promise.resolve()).catch(() => {}).then(() => atomic(path.join(directory(job.id),'job.json'),snapshot));
+    return job.saving;
+  };
+  const queued = () => [...jobs.values()].filter(j => j.status === 'queued').sort((a,b) => (a.queuedAt || a.created) - (b.queuedAt || b.created));
+  const view = job => ({id:job.id,status:job.status,frames:job.frames,total:job.total,extension:job.extension,error:job.error || '',title:job.config.title,timings:job.timings,encoder:job.encoder,
+    elapsedMs:job.status === 'rendering' ? Date.now() - job.started : job.timings?.elapsedMs || 0,
+    position:job.status === 'queued' ? queued().indexOf(job) + 1 : 0});
+  const expired = job => !['queued','rendering'].includes(job.status) && Date.now() - (job.updated || job.created) > RETENTION;
   for (const id of await fsp.readdir(jobsRoot)) {
     if (!UUID.test(id)) continue;
     try {
       const job = JSON.parse(await fsp.readFile(path.join(directory(id),'job.json'),'utf8'));
       validate(job.config);
-      if (Date.now() - job.created > RETENTION) { await fsp.rm(directory(id), {recursive:true,force:true}); continue; }
-      if (job.status === 'rendering') { job.status = 'failed'; job.error = 'PC restarted during rendering. Start a new export.'; }
+      if (expired(job)) { await fsp.rm(directory(id), {recursive:true,force:true}); continue; }
+      if (job.status === 'rendering') { job.status = 'queued'; job.error = ''; job.frames = 0; await save(job); }
       jobs.set(id, job);
     } catch { await fsp.rm(directory(id), {recursive:true,force:true}); }
   }
   async function cleanup() {
-    for (const job of jobs.values()) if (job !== running && !job.uploading && !job.downloading && Date.now() - job.created > RETENTION) {
+    for (const job of jobs.values()) if (job !== running && !job.uploading && !job.downloading && expired(job)) {
       jobs.delete(job.id); await fsp.rm(directory(job.id), {recursive:true,force:true});
     }
   }
   async function render(job) {
     const dir = directory(job.id), config = job.config, frameBytes = config.width * config.height * 4;
     const token = crypto.randomBytes(24).toString('hex');
-    let browser, local, encoder, code, stderr = '', received = 0, sending = false;
+    let browser, local, frames, encoder, code, stderr = '', received = 0, sending = false, format = 'rgba';
     const timeout = setTimeout(() => {job.status = 'failed';job.error = 'PC export exceeded two hours.';if (job.stop) job.stop();},2 * 60 * 60 * 1000);
-    job.status = 'rendering'; job.frames = 0; await save(job);
+    job.status = 'rendering'; job.frames = 0; job.error = ''; job.timings = {encodeMs:0}; const started = job.started = Date.now(); await save(job);
     try {
       await freeSpace(state, 1024 * MB);
-      const args = ['-hide_banner','-loglevel','error','-y','-f','rawvideo','-pix_fmt','rgba','-video_size',`${config.width}x${config.height}`,'-framerate',String(config.fps),'-i','pipe:0',
-        '-protocol_whitelist','file,pipe','-i',path.join(dir,'source'),'-map','0:v:0','-map','1:a:0',
-        '-c:v',config.mode === 'lossless' ? 'libx264rgb' : 'libx264','-preset','ultrafast','-crf',config.mode === 'lossless' ? '0' : '17',
-        '-pix_fmt',config.mode === 'lossless' ? 'rgb24' : 'yuv420p','-threads','4','-c:a',config.audio === 'aac' ? 'aac' : 'copy'];
-      if (config.audio === 'aac') args.push('-b:a','320k');
-      if (job.extension === 'mp4') args.push('-movflags','+faststart');
-      args.push(path.join(dir, `video.${job.extension}`));
-      encoder = spawn(ffmpeg,args,{windowsHide:true,stdio:['pipe','ignore','pipe']});
-      encoder.stdin.on('error', () => {});
-      encoder.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-2000); });
-      code = new Promise((resolve,reject) => { encoder.once('error',reject); encoder.once('close',resolve); }); code.catch(() => {});
-      job.stop = () => { encoder.kill(); if (browser) void browser.close(); };
+      job.stop = () => { if (encoder) encoder.kill(); if (browser) void browser.close(); };
       local = http.createServer(async (req,res) => {
         try {
           const base = `http://127.0.0.1:${local.address().port}`;
@@ -114,35 +111,64 @@ async function start(options = {}) {
           if (!url.pathname.startsWith(`/${token}/`)) fail('Not found.',404);
           const name = url.pathname.slice(token.length + 2);
           if (req.method === 'GET' && name === '') {
-            res.writeHead(200, {'Content-Type':'text/html','Content-Security-Policy':"default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'; connect-src 'self'"});
+            res.writeHead(200, {'Content-Type':'text/html','Content-Security-Policy':`default-src 'none'; script-src 'self'; style-src 'unsafe-inline'; font-src 'self'; connect-src 'self' ws://127.0.0.1:${local.address().port}`});
             res.end('<style>@font-face{font-family:Caveat;src:url(caveat.ttf);font-weight:100 900}@font-face{font-family:"Patrick Hand";src:url(patrick-hand.ttf)}</style><script src="renderer.js"></script>');
           } else if (req.method === 'GET' && name === 'renderer.js') {res.writeHead(200,{'Content-Type':'application/javascript'});res.end(script);}
           else if (req.method === 'GET' && ['caveat.ttf','patrick-hand.ttf','analysis'].includes(name)) {
             res.writeHead(200,{'Content-Type':name === 'analysis' ? 'application/octet-stream' : 'font/ttf'});
             await pipeline(fs.createReadStream(name === 'analysis' ? path.join(dir,'analysis') : path.join(__dirname,'../app/src/main/assets/visualizer/fonts',name)),res);
-          } else if (req.method === 'POST' && name === 'frames') {
-            const index = Number(url.searchParams.get('index')), count = Number(url.searchParams.get('count'));
-            if (job.status !== 'rendering' || sending || index !== received || !Number.isInteger(count) || count < 1 || count > 4 || index + count > job.total) fail('Invalid frame sequence.');
-            sending = true;
-            try {
-              const bytes = await body(req, Math.min(32 * MB, frameBytes * count));
-              if (bytes.length !== frameBytes * count) fail('Incomplete video frames.');
-              if (received % 120 === 0) await freeSpace(state, 256 * MB);
-              if (encoder.exitCode !== null || encoder.stdin.destroyed) fail('Encoder stopped: ' + stderr);
-              if (!encoder.stdin.write(bytes)) await once(encoder.stdin,'drain');
-              received += count; job.frames = received; res.end('OK');
-            } finally { sending = false; }
           } else fail('Not found.',404);
         } catch (error) { if (!res.headersSent && !res.destroyed) {res.writeHead(error.status || 500);res.end(error.message);} else res.destroy(); }
       });
       await new Promise(resolve => local.listen(0,'127.0.0.1',resolve));
+      frames = new WebSocketServer({noServer:true,maxPayload:32 * MB + 8,perMessageDeflate:false});
+      local.on('upgrade', (req,socket,head) => {
+        const host = `127.0.0.1:${local.address().port}`;
+        if (req.headers.host !== host || req.headers.origin !== `http://${host}` || req.url !== `/${token}/frames` || frames.clients.size) {socket.destroy();return;}
+        frames.handleUpgrade(req,socket,head,connection => frames.emit('connection',connection));
+      });
+      frames.on('connection', connection => {
+        connection.on('error', () => {});
+        connection.on('message', async (packet,binary) => {
+          try {
+            if (!binary || packet.length < 8 || sending || job.status !== 'rendering') fail('Invalid frame packet.');
+            const index = packet.readUInt32LE(0), count = packet.readUInt32LE(4);
+            if (index !== received || count < 1 || count > 4 || index + count > job.total || (format === 'rgba' ? packet.length !== 8 + frameBytes * count : packet.length <= 8)) fail('Invalid frame sequence or size.');
+            sending = true;
+            if (received % 120 === 0) await freeSpace(state,256 * MB);
+            if (encoder.exitCode !== null || encoder.stdin.destroyed) fail('Encoder stopped: ' + stderr);
+            const beforeEncode = performance.now();
+            await new Promise((resolve,reject) => encoder.stdin.write(packet.subarray(8), error => error ? reject(error) : resolve()));
+            job.timings.encodeMs += performance.now() - beforeEncode;
+            received += count; job.frames = received;
+            connection.send(JSON.stringify({frames:received}));
+          } catch (error) {connection.send(JSON.stringify({error:error.message}), () => connection.close());}
+          finally {sending = false;}
+        });
+      });
       const { chromium } = require('playwright');
       browser = await chromium.launch({channel:options.channel || process.env.NOFOCUS_BROWSER || 'msedge',headless:true});
       if (job.status !== 'rendering') throw new Error('Export cancelled.');
       const page = await browser.newPage({viewport:{width:config.width,height:config.height},deviceScaleFactor:1});
       await page.goto(`http://127.0.0.1:${local.address().port}/${token}/`);
+      format = await page.evaluate(config => window.prepare(config), {...config, software:options.software || process.env.NOFOCUS_PC_ENCODER === 'software'});
+      job.encoder = format === 'h264' ? 'PC hardware H.264' : config.mode === 'lossless' ? 'PC lossless RGB' : 'PC software H.264';
+      if (job.status !== 'rendering') throw new Error('Export paused or cancelled.');
+      const input = format === 'h264' ? ['-f','h264','-framerate',String(config.fps),'-i','pipe:0'] : ['-f','rawvideo','-pix_fmt','rgba','-video_size',`${config.width}x${config.height}`,'-framerate',String(config.fps),'-i','pipe:0'];
+      const video = format === 'h264' ? ['-c:v','copy'] : ['-c:v',config.mode === 'lossless' ? 'libx264rgb' : 'libx264','-preset','ultrafast','-crf',config.mode === 'lossless' ? '0' : '17',
+        '-pix_fmt',config.mode === 'lossless' ? 'rgb24' : 'yuv420p','-threads','4'];
+      const args = ['-hide_banner','-loglevel','error','-y',...input,
+        '-protocol_whitelist','file,pipe','-i',path.join(dir,'source'),'-map','0:v:0','-map','1:a:0',
+        ...video,'-c:a',config.audio === 'aac' ? 'aac' : 'copy'];
+      if (config.audio === 'aac') args.push('-b:a','320k');
+      if (job.extension === 'mp4') args.push('-movflags','+faststart');
+      args.push(path.join(dir, `video.${job.extension}`));
+      encoder = spawn(ffmpeg,args,{windowsHide:true,stdio:['pipe','ignore','pipe']});
+      encoder.stdin.on('error', () => {});
+      encoder.stderr.on('data', chunk => { stderr = (stderr + chunk).slice(-2000); });
+      code = new Promise((resolve,reject) => { encoder.once('error',reject); encoder.once('close',resolve); }); code.catch(() => {});
       const rendering = page.evaluate(config => window.render(config), config);
-      await Promise.race([rendering, code.then(() => { throw new Error('Encoder stopped early: ' + stderr); })]);
+      Object.assign(job.timings, await Promise.race([rendering, code.then(() => { throw new Error('Encoder stopped early: ' + stderr); })]));
       encoder.stdin.end();
       if (await code !== 0 || received !== job.total) throw new Error('Video encoding failed: ' + stderr);
       if (job.status !== 'rendering') throw new Error('Export cancelled.');
@@ -151,21 +177,24 @@ async function start(options = {}) {
       // A streaming checksum lets the phone validate a download before publishing it.
       const hash = crypto.createHash('sha256'); for await (const chunk of fs.createReadStream(output)) hash.update(chunk);
       job.sha256 = hash.digest('hex');
-    } catch (error) { if (job.status !== 'cancelled') {job.status = 'failed';job.error = error.message;} }
+    } catch (error) { if (job.status === 'rendering') {job.status = 'failed';job.error = error.message;} }
     finally {
       clearTimeout(timeout);
+      job.timings.elapsedMs = Date.now() - started;
       job.stop = null;
       if (encoder && encoder.exitCode === null) encoder.kill();
+      if (code) await code.catch(() => {});
       if (browser) await browser.close().catch(() => {});
+      if (frames) {for (const connection of frames.clients) connection.terminate();await new Promise(resolve => frames.close(resolve));}
       if (local) {local.closeAllConnections();await new Promise(resolve => local.close(resolve));}
       await save(job);
-      for (const name of ['source','analysis']) await fsp.rm(path.join(dir,name),{force:true});
+      if (job.status === 'complete') for (const name of ['source','analysis']) await fsp.rm(path.join(dir,name),{force:true});
       if (job.status !== 'complete') await fsp.rm(path.join(dir,`video.${job.extension}`),{force:true});
     }
   }
   function pump() {
     if (running || closing) return;
-    const job = [...jobs.values()].find(item => item.status === 'queued'); if (!job) return;
+    const job = queued()[0]; if (!job) return;
     running = job;
     job.task = render(job).catch(error => { job.status = 'failed'; job.error = error.message; }).finally(() => {running = null;pump();});
   }
@@ -173,25 +202,33 @@ async function start(options = {}) {
     try {
       if (req.headers.origin || !equal(req.headers.authorization, 'Bearer ' + credentials.token)) fail('Pair this phone with the PC first.',401);
       const url = new URL(req.url,'https://localhost'), route = url.pathname;
-      if (req.method === 'GET' && route === '/v1/info') return json(res,{name:os.hostname(),protocol:1,rendererVersion,busy:!!running});
+      if (req.method === 'GET' && route === '/v1/info') return json(res,{name:os.hostname(),protocol:2,rendererVersion,busy:!!running});
+      if (req.method === 'GET' && route === '/v1/jobs') return json(res,{jobs:[...jobs.values()].map(view)});
       if (req.method === 'POST' && route === '/v1/jobs') {
         const config = validate(JSON.parse((await body(req,2 * MB)).toString('utf8')));
         const previous = jobs.get(config.id);
-        if (previous) { if (JSON.stringify(previous.config) !== JSON.stringify(config)) fail('Job identity conflict.',409);return json(res,view(previous)); }
+        if (previous) { if (JSON.stringify(previous.config) !== JSON.stringify(config)) fail('Job identity conflict.',409);if (previous.initializing) await previous.initializing;return json(res,view(previous)); }
         await cleanup();
-        if (jobs.size >= 8 || [...jobs.values()].filter(j => ['uploading','queued','rendering'].includes(j.status)).length >= 3) fail('Finish or remove an existing PC export first.',429);
         await freeSpace(state, config.sourceBytes + config.analysisBytes + 1024 * MB);
+        const existing = jobs.get(config.id);
+        if (existing) {if (JSON.stringify(existing.config) !== JSON.stringify(config)) fail('Job identity conflict.',409);if (existing.initializing) await existing.initializing;return json(res,view(existing));}
+        if (jobs.size >= 16 || [...jobs.values()].filter(j => j.status !== 'complete').length >= 8) fail('The PC queue is full (8 unfinished / 16 retained). Save or remove an existing export first.',429);
         const job = {id:config.id,config,status:'uploading',frames:0,total:Math.ceil(config.duration * config.fps),created:Date.now(),
           extension:config.mode === 'lossless' || (config.audio === 'preserve' && config.codec !== 'aac') ? 'mkv' : 'mp4'};
-        await fsp.mkdir(directory(job.id),{recursive:true,mode:0o700}); await save(job);jobs.set(job.id,job);return json(res,view(job),201);
+        jobs.set(job.id,job);
+        job.initializing = (async () => {await fsp.mkdir(directory(job.id),{recursive:true,mode:0o700});await save(job);})();
+        try {await job.initializing;} catch (error) {jobs.delete(job.id);throw error;} finally {job.initializing = null;}
+        return json(res,view(job),201);
       }
-      const match = /^\/v1\/jobs\/([a-f0-9-]{36})(?:\/(source|analysis|start|file))?$/.exec(route);
+      const match = /^\/v1\/jobs\/([a-f0-9-]{36})(?:\/(source|analysis|start|pause|file))?$/.exec(route);
       if (!match || !UUID.test(match[1])) fail('Not found.',404);
       const job = jobs.get(match[1]); if (!job) fail('This PC export expired or was removed. Start it again.',404);
       const part = match[2], dir = directory(job.id);
       if (req.method === 'GET' && !part) return json(res,view(job));
+      if (job.changing) fail('This export is changing state. Try again.',409);
       if (req.method === 'DELETE' && !part) {
-        if (job.downloading) fail('Wait for the download to finish.',409);
+        job.changing = true;
+        if (job.downloading) {job.changing = false;fail('Wait for the download to finish.',409);}
         job.status = 'cancelled'; if (job.uploadRequest) job.uploadRequest.destroy(); if (job.stop) job.stop();
         if (job.task) await job.task;
         if (job.uploadDone) await job.uploadDone;
@@ -209,11 +246,22 @@ async function start(options = {}) {
           await fsp.rename(path.join(dir,part + '.tmp'),path.join(dir,part));return json(res,{bytes});
         } finally {job.uploading = false;job.uploadRequest = null;done();await fsp.rm(path.join(dir,part + '.tmp'),{force:true});}
       }
+      if (req.method === 'POST' && part === 'pause') {
+        if (!['queued','rendering','paused'].includes(job.status)) fail('Only queued or rendering exports can be paused.',409);
+        job.changing = true;
+        try {
+          job.status = 'paused';if (job.stop) job.stop();if (job.task) await job.task;
+          await save(job);pump();return json(res,view(job));
+        } finally {job.changing = false;}
+      }
       if (req.method === 'POST' && part === 'start') {
-        if (job.status === 'uploading') {
+        if (['uploading','paused','failed'].includes(job.status)) {
           if (job.uploading) fail('Upload is still in progress.',409);
-          for (const name of ['source','analysis']) if ((await fsp.stat(path.join(dir,name))).size !== job.config[name === 'source' ? 'sourceBytes' : 'analysisBytes']) fail('Incomplete upload.');
-          job.status = 'queued'; await save(job);pump();
+          job.changing = true;
+          try {
+            for (const name of ['source','analysis']) if (!fs.existsSync(path.join(dir,name)) || (await fsp.stat(path.join(dir,name))).size !== job.config[name === 'source' ? 'sourceBytes' : 'analysisBytes']) fail('Incomplete upload. Remove this job and upload again.',409);
+            job.status = 'queued';job.error = '';job.queuedAt = Date.now();await save(job);pump();
+          } finally {job.changing = false;}
         }
         return json(res,view(job));
       }
@@ -241,7 +289,7 @@ async function start(options = {}) {
   const timer = setInterval(() => cleanup().catch(() => {}),60000);timer.unref();pump();
   async function close() {
     closing = true;clearInterval(timer);
-    for (const job of jobs.values()) {if (job.uploadRequest) job.uploadRequest.destroy();if (job.stop) job.stop();}
+    for (const job of jobs.values()) {if (job.status === 'rendering') job.status = 'queued';if (job.uploadRequest) job.uploadRequest.destroy();if (job.stop) job.stop();}
     await Promise.allSettled([...jobs.values()].map(job => job.task).filter(Boolean));
     server.closeAllConnections();await new Promise(resolve => server.close(resolve));
   }
@@ -257,7 +305,7 @@ async function main() {
     cards.push(`<section><h2>${address}</h2><img src="${qr}" alt="Scan to pair"><p>Scan with the phone camera, or copy this code into Visual music → Export → Pair PC.</p><textarea readonly rows="5">${code}</textarea></section>`);
   }
   const file = path.join(app.state,'pairing.html');
-  await fsp.writeFile(file,`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>NoFocus PC export</title><style>body{font:18px system-ui;background:#0d171b;color:#eef4f1;max-width:780px;margin:40px auto;padding:20px}section{margin:30px 0;padding:20px;background:#1b2a2e;border-radius:20px}textarea{width:100%;box-sizing:border-box}img{max-width:100%}</style><h1>NoFocus PC export</h1><p>Keep this companion running. Connect your phone to the same Wi-Fi. Choose the address for that network below. Transfers are encrypted. Finished videos remain available for 24 hours.</p>${cards.join('')}<p>This pairing code grants access to this companion. Keep it private. To revoke pairing, stop the companion and remove identity.json from this folder.</p>`);
+  await fsp.writeFile(file,`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>NoFocus PC export</title><style>body{font:18px system-ui;background:#0d171b;color:#eef4f1;max-width:780px;margin:40px auto;padding:20px}section{margin:30px 0;padding:20px;background:#1b2a2e;border-radius:20px}textarea{width:100%;box-sizing:border-box}img{max-width:100%}</style><h1>NoFocus PC export</h1><p>Keep this companion running. Connect your phone to the same Wi-Fi. Choose the address for that network below. Transfers are encrypted. Finished videos remain available for 24 hours after completion.</p>${cards.join('')}<p>This pairing code grants access to this companion. Keep it private. To revoke pairing, stop the companion and remove identity.json from this folder.</p>`);
   console.log(`NoFocus export companion listening on port ${app.port}.\nPairing page: ${file}\nKeep this window running. Press Ctrl+C to stop.`);
   if (process.argv.includes('--open') && process.platform === 'win32') {
     // Fixed executable, argument passed without a shell; never interpolate a song title.

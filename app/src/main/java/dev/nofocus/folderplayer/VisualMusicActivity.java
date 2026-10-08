@@ -243,15 +243,17 @@ public final class VisualMusicActivity extends Activity {
             case "pcForget": pc.forget(); return pc.settings();
             case "pcTarget": pc.target(data.getString("target")); return "true";
             case "pcAvailable": return pc.available();
-            case "pcStatus": return pc.status();
-            case "pcRemove": pc.remove(); return "true";
+            case "pcStatus": return pc.status(data.optString("jobId"));
+            case "pcQueue": return pc.queue();
+            case "pcPause": return pc.pause(data.getString("jobId"));
+            case "pcRemove": pc.remove(data.optString("jobId")); return "true";
             case "pcBegin": case "pcResume": case "pcDownload":
                 if (export != null || importer != null || pcTransfer) throw new IOException("Finish or cancel the current operation first.");
                 pcTransfer = true; busy();
                 try {
-                    if (action.equals("pcResume")) return pc.resume(this::progress);
+                    if (action.equals("pcResume")) return pc.resume(data.optString("jobId"), this::progress);
                     if (action.equals("pcDownload")) {
-                        JSONObject result = pc.download(this::progress);
+                        JSONObject result = pc.download(data.optString("jobId"), this::progress);
                         getPreferences(0).edit().putString("lastExport", result.getString("uri")).putString("lastExtension", result.getString("extension")).apply();
                         return result;
                     }

@@ -2,7 +2,7 @@
 <html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
 <title>NoFocus · Visual music</title><link rel="stylesheet" href="style.css"></head>
-<body><header><button id="back" class="quiet" aria-label="Back to NoFocus">‹</button><div><b>Visual music</b><small>NoFocus · on your phone</small></div><button id="libraryButton" class="quiet">Library</button></header>
+<body><header><button id="back" class="quiet" aria-label="Back to NoFocus">‹</button><div><b>Visual music</b><small>NoFocus</small></div><button id="queueButton" class="quiet" hidden>PC queue</button><button id="libraryButton" class="quiet">Library</button></header>
 <main>
 <p id="status" role="status" aria-live="polite"></p>
 <section id="library" class="panel"><h1>Your music, in motion.</h1><p>Capture a Suno lyrics video, add the Gemini timings, then listen or export here.</p>
@@ -20,7 +20,7 @@
 <details><summary>Reference lyrics for older Gemini responses</summary><p class="hint">Only needed when the JSON is missing language or phrase labels.</p><textarea id="guideInput" rows="5" aria-label="Reference lyrics" placeholder="Spanish line (English response)"></textarea></details>
 <p class="hint">Timings are measured from the start of the matching video. Review Gemini’s uncertain words; timings are never invented.</p><div class="grid"><button id="saveLyrics" class="primary">Save & preview</button><button id="closeLyrics">Back</button></div></section>
 <section id="export" class="panel" hidden><h1>Export visualizer video</h1>
-<div id="pcJob" hidden><h2>PC export</h2><p id="pcProgress" role="status"></p><div class="grid"><button id="pcRefresh">Check progress</button><button id="pcResume" hidden>Resume upload</button><button id="pcDownload" class="primary" hidden>Save to phone</button><button id="pcRemove">Cancel / remove job</button></div><p class="hint">After upload, the PC keeps working while you use other apps. Return here to save the finished video. Results are kept on the PC for 24 hours.</p></div>
+<div id="pcJob" hidden><p id="pcProgress"></p><button id="openQueue" class="wide">Open PC queue</button></div>
 <div id="exportOptions"><label>Export using<select id="exportTarget"><option value="auto">Automatic · use paired PC when available</option><option value="phone">This phone</option><option value="pc">Paired PC</option></select></label>
 <p id="pcInfo" class="hint"></p><details id="pairOptions"><summary>Pair PC</summary><p class="hint">Run desktop_export/start.ps1 on your PC, then scan its QR code with your camera or paste its pairing code here. Use the same Wi-Fi.</p><label>Pairing code<textarea id="pairCode" rows="3" spellcheck="false" autocomplete="off"></textarea></label><div class="grid"><button id="pairPc">Pair PC</button><button id="forgetPc">Forget PC</button></div></details>
 <label>Canvas size<select id="size"><option value="720x1280">Portrait · 720 × 1280</option><option value="1080x1920">Portrait · 1080 × 1920</option><option value="1080x1080">Square · 1080 × 1080</option><option value="1280x720">Landscape · 1280 × 720</option><option value="1920x1080">Landscape · 1920 × 1080</option></select></label>
@@ -32,4 +32,8 @@
 <progress id="progress" value="0" max="1" hidden></progress><p id="exportProgress" role="status"></p>
 <details id="exportStats" hidden><summary>Export performance</summary><p id="exportStatsText" class="hint"></p></details>
 <button id="startExport" class="primary wide">Export video</button><button id="cancelExport" class="wide" hidden>Cancel export</button><button id="shareExport" class="wide">Share last export</button><button id="closeExport" class="wide quiet">Back to listening</button></section>
+<section id="queue" class="panel" hidden><h1>PC export queue</h1><p>Prepare your next song while the PC renders one video at a time. Save completed videos here.</p>
+<p id="pcConnection" role="status"></p><p id="pcEmpty">No pending PC exports.</p><div id="pcJobs"></div>
+<button id="pcCancelTransfer" class="wide" hidden>Pause transfer</button><button id="pcRefresh" class="wide">Check progress</button><button id="closeQueue" class="quiet wide">Back to library</button>
+<p class="hint">Up to 8 unfinished exports and 16 retained results. Keep this screen open while uploading or saving. Once uploaded, the PC works independently. Results are retained for 24 hours after completion. Pausing frees the PC; resuming renders again from the start using its saved upload.</p></section>
 </main><script src="app.js"></script></body></html>

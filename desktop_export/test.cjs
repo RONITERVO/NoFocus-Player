@@ -28,7 +28,7 @@ async function wait(pair,id) {
   }
   throw new Error('PC rendering timed out');
 }
-test('authenticated PC rendering, exact audio/RGB, reconnect, validation and cancellation', {timeout:180000}, async () => {
+test('authenticated PC rendering, exact audio/RGB, hardware parity, queue recovery and cancellation', {timeout:180000}, async t => {
   const state=await fsp.mkdtemp(path.join(os.tmpdir(),'nofocus-export-test-'));
   let app;
   try {
@@ -62,6 +62,7 @@ test('authenticated PC rendering, exact audio/RGB, reconnect, validation and can
     assert.deepEqual(audio,pcm);
     const pixels=execFileSync(ffmpeg,['-v','error','-i',output,'-vf','select=eq(n\\,18)','-frames:v','1','-pix_fmt','rgba','-f','rawvideo','pipe:1'],{windowsHide:true,maxBuffer:5*1024*1024});
     // Compare an active lyric frame after sequential state updates, not just the empty intro.
+    let expectedPixels;
     const {chromium}=require('playwright');const browser=await chromium.launch({channel:'msedge',headless:true});
     try {
       const page=await browser.newPage();
@@ -69,19 +70,59 @@ test('authenticated PC rendering, exact audio/RGB, reconnect, validation and can
       const font=fs.readFileSync(path.join(__dirname,'../app/src/main/assets/visualizer/fonts/caveat.ttf')).toString('base64');
       await page.setContent(`<style>@font-face{font-family:Caveat;src:url(data:font/ttf;base64,${font});font-weight:100 900}</style>`);await page.addScriptTag({content:bundle});
       const expected=await page.evaluate(async config=>{const r=await Parity.createVideoRenderer(config);const spectrum=new Parity.OfflineSpectrum([new Float32Array(44100)],44100);for(let i=0;i<=18;i++)r.draw(i/config.fps,spectrum);const bytes=Array.from(r.pixels());r.destroy();return bytes;},config);
-      assert.deepEqual(pixels,Buffer.from(expected));
+      expectedPixels=Buffer.from(expected);assert.deepEqual(pixels,expectedPixels);
     } finally {await browser.close();}
     await app.close();app=await start({state,port:0,host:'127.0.0.1'});pair=app.pairing('127.0.0.1');
     assert.equal((await request(pair,'GET',`/v1/jobs/${config.id}`)).json().status,'complete');
     assert.deepEqual((await request(pair,'GET',`/v1/jobs/${config.id}/file`)).bytes,download.bytes);
     assert.equal((await request(pair,'DELETE',`/v1/jobs/${config.id}`)).status,200);
     assert.equal((await request(pair,'GET',`/v1/jobs/${config.id}`)).status,404);
+    // High-quality hardware mode keeps the canvas composition, frame count,
+    // orientation and original PCM. Lossless above still uses exact RGB.
+    const publish={...config,id:crypto.randomUUID(),mode:'publish'};
+    await request(pair,'POST','/v1/jobs',publish);
+    await request(pair,'PUT',`/v1/jobs/${publish.id}/source`,await fsp.readFile(source));
+    await request(pair,'PUT',`/v1/jobs/${publish.id}/analysis`,analysis);
+    await request(pair,'POST',`/v1/jobs/${publish.id}/start`,{});
+    const completed=await wait(pair,publish.id);t.diagnostic(completed.encoder);
+    const published=path.join(state,'publish.mkv');await fsp.writeFile(published,(await request(pair,'GET',`/v1/jobs/${publish.id}/file`)).bytes);
+    const decoded=execFileSync(ffmpeg,['-v','error','-i',published,'-map','0:v:0','-fps_mode','passthrough','-pix_fmt','rgba','-f','rawvideo','pipe:1'],{windowsHide:true,maxBuffer:20*1024*1024});
+    assert.equal(decoded.length,320*320*4*24,'no dropped, duplicated or extra encoder frames');
+    const actualFrame=decoded.subarray(18*320*320*4,19*320*320*4);
+    let difference=0;for(let i=0;i<actualFrame.length;i++) difference+=Math.abs(actualFrame[i]-expectedPixels[i]);
+    assert.ok(difference/actualFrame.length<6,`same active lyric frame with H.264 compression: mean error ${difference/actualFrame.length}`);
+    assert.deepEqual(execFileSync(ffmpeg,['-v','error','-i',published,'-map','0:a:0','-f','f32le','pipe:1'],{windowsHide:true}),pcm);
+    await request(pair,'DELETE',`/v1/jobs/${publish.id}`);
     const cancel={...config,id:crypto.randomUUID(),duration:30,analysisBytes:30*44100*4};
     await request(pair,'POST','/v1/jobs',cancel);
     await request(pair,'PUT',`/v1/jobs/${cancel.id}/source`,await fsp.readFile(source));
     await request(pair,'PUT',`/v1/jobs/${cancel.id}/analysis`,Buffer.alloc(cancel.analysisBytes));
     await request(pair,'POST',`/v1/jobs/${cancel.id}/start`,{});
+    // Pause the active render, recreate the service, then resume using the
+    // uploaded files. A second job must be accepted while the first is pending.
+    assert.equal((await request(pair,'POST',`/v1/jobs/${cancel.id}/pause`,{})).json().status,'paused');
+    assert.equal(fs.statSync(path.join(state,'jobs',cancel.id,'source')).size,config.sourceBytes);
+    await app.close();app=await start({state,port:0,host:'127.0.0.1'});pair=app.pairing('127.0.0.1');
+    assert.equal((await request(pair,'GET',`/v1/jobs/${cancel.id}`)).json().status,'paused');
+    const next={...config,id:crypto.randomUUID()};
+    assert.equal((await request(pair,'POST','/v1/jobs',next)).status,201);
+    await request(pair,'PUT',`/v1/jobs/${next.id}/source`,await fsp.readFile(source));
+    await request(pair,'PUT',`/v1/jobs/${next.id}/analysis`,analysis);
+    await request(pair,'POST',`/v1/jobs/${cancel.id}/start`,{});
+    await request(pair,'POST',`/v1/jobs/${next.id}/start`,{});
+    assert.equal((await request(pair,'GET',`/v1/jobs/${next.id}`)).json().status,'queued');
+    assert.equal((await request(pair,'GET','/v1/jobs')).json().jobs.length,2);
+    await app.close();app=await start({state,port:0,host:'127.0.0.1'});pair=app.pairing('127.0.0.1');
+    assert.equal((await request(pair,'GET',`/v1/jobs/${cancel.id}`)).json().status,'rendering');
     assert.equal((await request(pair,'DELETE',`/v1/jobs/${cancel.id}`)).status,200);
     assert.equal(fs.existsSync(path.join(state,'jobs',cancel.id)),false);
+    await wait(pair,next.id);
+    assert.equal((await request(pair,'DELETE',`/v1/jobs/${next.id}`)).status,200);
+    const reservations=Array.from({length:8},()=>({...config,id:crypto.randomUUID()}));
+    const created=await Promise.all(reservations.map(item=>request(pair,'POST','/v1/jobs',item)));
+    assert.ok(created.every(response=>response.status===201),'concurrent queue reservations');
+    assert.equal((await request(pair,'POST','/v1/jobs',{...config,id:crypto.randomUUID()})).status,429);
+    assert.equal((await request(pair,'POST','/v1/jobs',reservations[0])).status,200,'retry existing id while queue is full');
+    await Promise.all(reservations.map(item=>request(pair,'DELETE',`/v1/jobs/${item.id}`)));
   } finally {if(app) await app.close();await fsp.rm(state,{recursive:true,force:true});}
 });

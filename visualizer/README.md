@@ -36,3 +36,7 @@ Limits: Android 10+, media under 768 MB / 20 minutes, sufficient private storage
 ## Hybrid export (1.7.0)
 
 Export offers Automatic, This phone, and Paired PC. See [the PC companion guide](../desktop_export/README.md) for launch, QR pairing, optional Windows startup, protocol/security details, durable jobs and end-to-end tests. The generated renderer-version.txt hashes the vendored source manifest and bundled fonts so incompatible companions are rejected before upload. Phone-local export reports per-frame draw, read and transfer/encoder-wait timings. Original source audio is preserved in both routes by default.
+
+## PC queue and faster export (1.8.0)
+
+The phone can submit multiple prepared songs while the PC renders them sequentially. Queue cards provide progress, pause, retry, per-video download and removal. Existing single-job preferences migrate without replacing the job ID or settings. Pausing preserves the uploaded inputs; resuming or recovering a PC restart renders from the beginning without another upload. The companion uses browser hardware H.264 plus an acknowledged binary loopback connection, with raw/software support for lossless RGB and unsupported hardware. Upgrade both the phone and companion for export protocol 2; renderer source/font hashes remain unchanged.

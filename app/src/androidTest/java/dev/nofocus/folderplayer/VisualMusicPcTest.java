@@ -17,10 +17,10 @@ final class VisualMusicPcTest {
         instrumentation = test;
         Context context = test.getTargetContext();
         SharedPreferences prefs = context.getSharedPreferences("visual-pc",0);
-        String previousPair = prefs.getString("pair",""), previousJob = prefs.getString("job",""), previousTarget = prefs.getString("target","auto");
+        String previousPair = prefs.getString("pair",""), previousJob = prefs.getString("job",""), previousJobs = prefs.getString("jobs","[]"), previousTarget = prefs.getString("target","auto");
         SharedPreferences uiPrefs = context.getSharedPreferences("VisualMusicActivity",0);
         String previousSong = uiPrefs.getString("selected",""), previousExport = uiPrefs.getString("lastExport",""), previousExtension = uiPrefs.getString("lastExtension","");
-        if (!previousJob.isEmpty()) throw new IOException("Finish the user's pending PC job before running this test.");
+        if (!previousJob.isEmpty() || !previousJobs.equals("[]")) throw new IOException("Finish the user's pending PC job before running this test.");
         File directory = new File(context.getCacheDir(),"pc-test-" + UUID.randomUUID());directory.mkdirs();
         File input = new File(SongDownloadService.directory(context),"pc-test-" + UUID.randomUUID() + ".wav");input.getParentFile().mkdirs();
         VisualMusicLibrary library = new VisualMusicLibrary(context);VisualMusicPc client = new VisualMusicPc(library);
@@ -41,9 +41,19 @@ final class VisualMusicPcTest {
             song = library.importMedia(SongFileProvider.uri(context,input.getName()),runtime,message -> {});
             JSONObject options = new JSONObject().put("width",720).put("height",1280).put("fps",24).put("mode","lossless").put("audio","preserve");
             JSONObject started = client.begin(song,options,message -> {});
+            // Recreate the legacy single-job preference and prove the upgrade
+            // migrates its exact id/configuration into the durable queue.
+            JSONArray initial = new JSONArray(prefs.getString("jobs","[]"));
+            prefs.edit().putString("job",initial.getJSONObject(0).toString()).remove("jobs").commit();
             // A new client must recover the same durable job after the screen/process is recreated.
             client = new VisualMusicPc(library);
             if (!client.settings().getBoolean("pending")) throw new AssertionError("PC job not retained");
+            if (prefs.contains("job") || client.settings().getJSONArray("jobs").length() != 1) throw new AssertionError("Legacy migration failed");
+            // A second request must keep the first id and be independently removable.
+            JSONObject second = client.begin(song,options,message -> {});
+            if (client.queue().getJSONArray("jobs").length() != 2) throw new AssertionError("Second export displaced the first");
+            client.remove(second.getString("id"));
+            if (!client.status().getString("id").equals(started.getString("id"))) throw new AssertionError("Removing second job removed first");
             long deadline = System.currentTimeMillis() + 120000;
             JSONObject job;
             do {
@@ -70,11 +80,22 @@ final class VisualMusicPcTest {
             js("document.getElementById('showExport').click();true");waitJs("!document.getElementById('export').hidden",10000);
             js("document.getElementById('exportTarget').value='pc';document.getElementById('fps').value='24';document.getElementById('videoQuality').value='lossless';document.getElementById('startExport').click();true");
             waitJs("document.getElementById('exportProgress').textContent.startsWith('Upload finished')",60000);
+            if (!Boolean.TRUE.equals(js("!document.getElementById('startExport').disabled"))) throw new AssertionError("Pending export blocks the next song");
+            js("document.getElementById('exportProgress').textContent='';document.getElementById('startExport').click();true");
+            waitJs("document.getElementById('exportProgress').textContent.startsWith('Upload finished')",60000);
+            if (client.settings().getJSONArray("jobs").length() != 2) throw new AssertionError("UI failed to queue a second export");
             test.runOnMainSync(activity::finish);test.waitForIdleSync();open(context);
-            js("document.getElementById('showExport').click();true");waitJs("!document.getElementById('pcDownload').hidden",60000);
-            js("document.getElementById('pcDownload').click();true");waitJs("document.getElementById('exportProgress').textContent.startsWith('Saved')",60000);
+            js("document.getElementById('queueButton').click();true");
+            waitJs("!!document.querySelector('#pcJobs [data-action=pcDownload]:not([hidden])')",60000);
+            js("document.querySelector('#pcJobs [data-action=pcDownload]:not([hidden])').click();true");
+            waitJs("document.getElementById('status').textContent.startsWith('Video saved')",60000);
             uiOutputs.add(Uri.parse(uiPrefs.getString("lastExport","")));
-            if (client.hasJob()) throw new AssertionError("UI did not retire downloaded PC job");
+            if (client.settings().getJSONArray("jobs").length() != 1) throw new AssertionError("UI retired the wrong number of jobs");
+            client.remove();
+            // Queue is reachable without selecting a song. New exports stay enabled.
+            js("document.getElementById('libraryButton').click();true");waitJs("!document.getElementById('library').hidden",10000);
+            test.runOnMainSync(activity::finish);test.waitForIdleSync();open(context);
+            js("document.getElementById('showExport').click();true");waitJs("!document.getElementById('export').hidden",10000);
             // An unreachable PC in Automatic must choose a local hardware export before uploading.
             JSONObject offline = VisualMusicPc.parsePairing(code);offline.put("url","https://127.0.0.1:49998");
             prefs.edit().putString("pair",offline.toString()).commit();
@@ -87,12 +108,15 @@ final class VisualMusicPcTest {
         } finally {
             if (activity != null) {test.runOnMainSync(activity::finish);test.waitForIdleSync();}
             context.stopService(new Intent(context,VisualMusicPlayback.class));
-            if (client.hasJob() && previousJob.isEmpty()) try {client.remove();} catch (Exception ignored) { }
+            if (client.hasJob() && previousJob.isEmpty()) try {
+                JSONArray remaining = client.settings().getJSONArray("jobs");
+                for (int i = 0; i < remaining.length(); i++) client.remove(remaining.getJSONObject(i).getString("id"));
+            } catch (Exception ignored) { }
             if (published != null) context.getContentResolver().delete(published,null,null);
             for (Uri output : uiOutputs) context.getContentResolver().delete(output,null,null);
             if (song != null) DownloadRuntime.removeTree(library.song(song.getString("id")));
             input.delete();DownloadRuntime.removeTree(directory);
-            prefs.edit().putString("pair",previousPair).putString("job",previousJob).putString("target",previousTarget).commit();
+            prefs.edit().putString("pair",previousPair).putString("job",previousJob).putString("jobs",previousJobs).putString("target",previousTarget).commit();
             uiPrefs.edit().putString("selected",previousSong).putString("lastExport",previousExport).putString("lastExtension",previousExtension).commit();
         }
     }

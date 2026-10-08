@@ -29,10 +29,11 @@ let song: Song | undefined, samples: Float32Array | undefined, renderer: Rendere
 let frame = -1, rendering = false, exporting = false, loading = false, panel = 'library', lastError = '', generation = 0;
 let screenAwake = false;
 let scrubbing = false;
-let pcPending = false, pcPolling = false;
+let pcPending = false, pcPolling = false, pcJobs: any[] = [];
+let pcMutation = false;
 const config = () => { const [width, height] = value('size').value.split('x').map(Number); return { width, height, fps: Number(value('fps').value) }; };
 const playback = (): { id: string; playing: boolean; seconds: number; error: string } => JSON.parse(window.Native.state());
-function show(id: string) { panel = id; for (const name of ['library', 'listen', 'lyrics', 'export']) $(name).hidden = name !== id; window.scrollTo(0, 0); }
+function show(id: string) { panel = id; for (const name of ['library', 'listen', 'lyrics', 'export', 'queue']) $(name).hidden = name !== id; window.scrollTo(0, 0); }
 function event(id: string, task: () => void | Promise<void>) { $(id).addEventListener('click', () => Promise.resolve().then(task).catch(error => status(error.message, true))); }
 function busyImport(busy: boolean) { loading = busy; for (const id of ['capture', 'latest', 'importMedia', 'libraryButton']) ($(id) as HTMLButtonElement).disabled = busy; }
 async function list() {
@@ -190,30 +191,72 @@ event('shareExport', () => native('shareExport'));
 function applyPc(info: any) {
   value('exportTarget').value = info.target;
   $('pcInfo').textContent = info.paired ? `Paired with ${info.name}. Automatic checks availability before sending.` : 'No PC paired. Automatic exports on this phone until you pair one.';
-  pcPending = info.pending;
-  $('pcJob').hidden = !pcPending;
-  ($('startExport') as HTMLButtonElement).disabled = pcPending;
+  pcPending = info.pending; pcJobs = info.jobs || [];
+  $('pcJob').hidden = !pcPending; $('queueButton').hidden = !pcPending;
+  $('queueButton').textContent = `Queue (${pcJobs.length})`;
+  $('pcProgress').textContent = `${pcJobs.length} PC export${pcJobs.length === 1 ? '' : 's'}. You can submit another song while the PC works.`;
+  renderPcJobs();
 }
 async function refreshPc() {
   applyPc(await native('pcSettings'));
   if (pcPending) await checkPc();
 }
+function renderPcJobs() {
+  const container = $('pcJobs');
+  for (const element of Array.from(container.children) as HTMLElement[])
+    if (!pcJobs.some(job => job.id === element.dataset.jobId)) element.remove();
+  $('pcEmpty').hidden = !!pcJobs.length;
+  for (const job of pcJobs) {
+    let card = Array.from(container.children).find(element => (element as HTMLElement).dataset.jobId === job.id) as HTMLElement | undefined;
+    if (!card) {
+      card = document.createElement('article'); card.className = 'pc-card'; card.dataset.jobId = job.id;
+      const title = document.createElement('h2'), detail = document.createElement('p'), buttons = document.createElement('div');
+      title.className = 'pc-title'; detail.className = 'pc-detail'; buttons.className = 'grid';
+      for (const action of ['pcResume', 'pcPause', 'pcDownload', 'pcRemove']) {
+        const button = document.createElement('button'); button.dataset.action = action;
+        button.onclick = () => pcAction(action, job.id).catch(error => status(error.message, true)); buttons.append(button);
+      }
+      card.append(title, detail, buttons);container.append(card);
+    }
+    const descriptions: Record<string, string> = {
+      unknown: 'Reconnect to check this saved export.', missing: 'Upload did not reach the PC, or this export expired. Upload again to retry.',
+      uploading: 'Upload paused. Resume when this phone is connected.', queued: `Waiting in the PC queue · position ${job.position || 1}.`,
+      paused: 'Paused. Resume restarts rendering from the beginning using the uploaded files.',
+      rendering: `${job.encoder || 'PC'} · ${Math.floor(job.frames / job.total * 100)}% · ${clock((job.elapsedMs || 0) / 1000)} elapsed`
+        + (job.frames > 0 ? ` · about ${clock((job.elapsedMs || 0) / 1000 / job.frames * (job.total - job.frames))} left` : ''),
+      complete: `Ready to save${job.elapsedMs ? ` · ${clock(job.elapsedMs / 1000)} export time` : ''}.`,
+      failed: job.error || 'Export failed. Retry using the uploaded files.', cancelled: 'PC export cancelled.',
+    };
+    card.querySelector('.pc-title')!.textContent = job.title;
+    card.querySelector('.pc-detail')!.textContent = descriptions[job.status] || job.status;
+    const button = (action: string) => card!.querySelector(`[data-action="${action}"]`) as HTMLButtonElement;
+    button('pcResume').hidden = !['unknown','missing','uploading','paused','failed'].includes(job.status);
+    button('pcResume').textContent = job.status === 'paused' ? 'Resume export' : job.status === 'failed' ? 'Retry export' : 'Resume upload';
+    button('pcPause').hidden = !['rendering','queued'].includes(job.status);button('pcPause').textContent = 'Pause';
+    button('pcDownload').hidden = job.status !== 'complete';button('pcDownload').textContent = 'Save to phone';button('pcDownload').className = 'primary';
+    button('pcRemove').textContent = 'Cancel / remove';
+    for (const control of Array.from(card.querySelectorAll('button'))) control.disabled = exporting || pcMutation;
+  }
+}
 async function checkPc() {
-  if (pcPolling || !pcPending || exporting) return;
+  if (pcPolling || !pcPending || exporting || pcMutation) return;
   pcPolling = true;
   try {
-    const job = await native('pcStatus');
-    const descriptions: Record<string, string> = {
-      uploading: 'Upload paused. Resume to send the original media and analysis.', queued: 'Waiting for the PC to finish its current export.',
-      rendering: `Rendering on PC · ${Math.floor(job.frames / job.total * 100)}% · ${job.frames} / ${job.total} frames`,
-      complete: 'Ready. Save the finished video to this phone.', failed: job.error || 'The PC export failed. Remove this job and try again.', cancelled: 'PC export cancelled.',
-    };
-    $('pcProgress').textContent = `${job.title} · ${descriptions[job.status] || job.status}`;
-    $('pcResume').hidden = job.status !== 'uploading'; $('pcDownload').hidden = job.status !== 'complete';
+    pcJobs = (await native('pcQueue')).jobs;renderPcJobs();$('pcConnection').textContent = '';
   } catch (error) {
-    $('pcProgress').textContent = `PC unavailable: ${(error as Error).message}. Your pending job is saved. Reconnect and check progress.`;
-    $('pcDownload').hidden = true; $('pcResume').hidden = false;
+    $('pcConnection').textContent = `PC unavailable: ${(error as Error).message}. Your queue is saved. Reconnect and check progress.`;
   } finally { pcPolling = false; }
+}
+async function openQueue() { if (exporting) return; if (song) await native('pause', {id:song.id});show('queue');status('');await refreshPc(); }
+event('queueButton', openQueue);event('openQueue', openQueue);
+event('closeQueue', async () => { show('library');await list(); });
+async function pcAction(action: string, jobId: string) {
+  if (exporting || pcMutation) return;
+  if (action === 'pcDownload' || action === 'pcResume') return transferPc(action, jobId);
+  if (action === 'pcRemove' && !confirm('Remove this PC export and its uploaded files? Your song stays in the phone library.')) return;
+  pcMutation = true; renderPcJobs();
+  try { await native(action, {jobId});status(action === 'pcPause' ? 'PC export paused. Its uploaded files are retained.' : 'PC export removed.'); }
+  finally { pcMutation = false;await refreshPc(); }
 }
 value('exportTarget').addEventListener('change', () => native('pcTarget', { target: value('exportTarget').value }).catch(error => status(error.message, true)));
 event('pairPc', async () => {
@@ -222,27 +265,26 @@ event('pairPc', async () => {
 });
 event('forgetPc', async () => { applyPc(await native('pcForget')); status('PC pairing removed.'); });
 event('pcRefresh', checkPc);
-event('pcRemove', async () => { if (exporting) return; await native('pcRemove'); await refreshPc(); status('PC export removed.'); });
 function exportBusy(busy: boolean) {
   exporting = busy;
   for (const id of ['exportOptions', 'startExport', 'shareExport', 'closeExport']) $(id).hidden = busy;
   $('cancelExport').hidden = !busy; ($('libraryButton') as HTMLButtonElement).disabled = busy;
-  for (const id of ['pcRefresh', 'pcResume', 'pcDownload', 'pcRemove']) ($ (id) as HTMLButtonElement).disabled = busy;
+  for (const id of ['pcRefresh', 'queueButton', 'closeQueue']) ($(id) as HTMLButtonElement).disabled = busy;
+  $('pcCancelTransfer').hidden = !busy;renderPcJobs();
 }
-async function transferPc(action: 'pcResume' | 'pcDownload') {
+async function transferPc(action: 'pcResume' | 'pcDownload', jobId: string) {
   if (exporting) return;
   exportBusy(true); cancelled = false; $('exportProgress').textContent = action === 'pcDownload' ? 'Saving from PC…' : 'Resuming upload…';
   $('cancelExport').textContent = 'Pause transfer'; $('exportStats').hidden = true;
   try {
-    const result = await native(action);
+    const result = await native(action, {jobId});
     $('exportProgress').textContent = action === 'pcDownload' ? `Saved ${result.extension.toUpperCase()} in Download/NoFocus.` : 'Upload finished. You can leave this screen while the PC renders.';
-    status(action === 'pcDownload' ? 'Video saved from PC.' : 'Rendering on paired PC.');
+    status(action === 'pcDownload' ? `Video saved in Download/NoFocus (${result.extension.toUpperCase()}).` : 'Export queued on the paired PC. You can prepare another song.');
   } catch (error) { status((error as Error).message, true); }
   finally { exportBusy(false); await refreshPc(); }
 }
-event('pcResume', () => transferPc('pcResume'));
-event('pcDownload', () => transferPc('pcDownload'));
-setInterval(() => { if (panel === 'export' && pcPending && !exporting && !document.hidden) void checkPc(); }, 2500);
+event('pcCancelTransfer', async () => { cancelled = true;await native('cancel'); });
+setInterval(() => { if ((panel === 'export' || panel === 'queue') && pcPending && !exporting && !document.hidden) void checkPc(); }, 2500);
 function binaryFrame(packet: Uint8Array): Promise<void> {
   return new Promise((resolve, reject) => {
     const bridge = window.NativeFrames!;
@@ -252,7 +294,7 @@ function binaryFrame(packet: Uint8Array): Promise<void> {
   });
 }
 event('startExport', async () => {
-  if (!song || !samples || exporting || pcPending) return;
+  if (!song || !samples || exporting) return;
   exportBusy(true); cancelled = false;
   $('cancelExport').textContent = 'Cancel export';
   $('exportStats').hidden = true;
@@ -272,7 +314,7 @@ event('startExport', async () => {
       $('exportProgress').textContent = 'Sending source to paired PC…';
       await native('pcBegin', options);
       $('exportProgress').textContent = 'Upload finished. You can leave this screen while the PC renders.';
-      status('Rendering on paired PC. Return to Export to save the finished video.');
+      status('Export queued on the paired PC. Prepare another song, or open PC queue to check progress.');
       return;
     }
     status(target === 'auto' ? `Using this phone. ${pc.reason || ''}` : 'Rendering on this phone.');

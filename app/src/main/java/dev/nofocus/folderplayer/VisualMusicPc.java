@@ -47,28 +47,72 @@ final class VisualMusicPc {
     JSONObject settings() throws Exception {
         JSONObject pair = pairing();
         return new JSONObject().put("paired", pair != null).put("name", pair == null ? "" : pair.optString("name"))
-                .put("target", prefs.getString("target", "auto")).put("pending", !prefs.getString("job", "").isEmpty());
+                .put("target", prefs.getString("target", "auto")).put("pending", hasJob()).put("jobs", localJobs());
     }
     void target(String target) throws IOException {
         if (!Arrays.asList("auto", "phone", "pc").contains(target)) throw new IOException("Invalid export destination.");
         prefs.edit().putString("target", target).apply();
     }
     JSONObject pair(String code) throws Exception {
-        if (hasJob()) throw new IOException("Finish or remove the current PC export before changing pairing.");
+        if (hasJob()) throw new IOException("Finish or remove the pending PC exports before changing pairing.");
         JSONObject pair = parsePairing(code); JSONObject info = request(pair, "GET", "/v1/info", null);
         checkVersion(info); pair.put("name", info.getString("name"));
         prefs.edit().putString("pair", pair.toString()).commit(); return settings();
     }
     void forget() throws Exception {
-        if (hasJob()) throw new IOException("Finish or remove the current PC export before forgetting this PC.");
+        if (hasJob()) throw new IOException("Finish or remove the pending PC exports before forgetting this PC.");
         prefs.edit().remove("pair").apply();
     }
     private JSONObject pairing() throws JSONException { String value = prefs.getString("pair", ""); return value.isEmpty() ? null : new JSONObject(value); }
-    boolean hasJob() { return !prefs.getString("job", "").isEmpty(); }
-    boolean usesSong(String id) throws Exception { return hasJob() && new JSONObject(prefs.getString("job", "{}")).optString("songId").equals(id); }
+    // Migrate the original single-job preference without changing its remote id
+    // or configuration. Uploads and downloads can then resume after an upgrade.
+    private synchronized JSONArray jobs() throws JSONException {
+        String legacy = prefs.getString("job", "");
+        JSONArray jobs = new JSONArray(prefs.getString("jobs", "[]"));
+        if (!legacy.isEmpty()) {
+            JSONObject previous = new JSONObject(legacy);
+            String id = previous.getJSONObject("config").getString("id"); boolean found = false;
+            for (int i = 0; i < jobs.length(); i++) if (jobs.getJSONObject(i).getJSONObject("config").getString("id").equals(id)) found = true;
+            if (!found) jobs.put(previous);
+            prefs.edit().putString("jobs", jobs.toString()).remove("job").commit();
+        }
+        return jobs;
+    }
+    boolean hasJob() { return !prefs.getString("job", "").isEmpty() || !prefs.getString("jobs", "[]").equals("[]"); }
+    boolean usesSong(String id) throws Exception {
+        JSONArray jobs = jobs();
+        for (int i = 0; i < jobs.length(); i++) if (jobs.getJSONObject(i).optString("songId").equals(id)) return true;
+        return false;
+    }
+    private synchronized void add(JSONObject job) throws Exception {
+        JSONArray jobs = jobs();jobs.put(job);prefs.edit().putString("jobs", jobs.toString()).commit();
+    }
+    private synchronized void retire(String id) throws Exception {
+        JSONArray jobs = jobs(), remaining = new JSONArray();
+        for (int i = 0; i < jobs.length(); i++) if (!jobs.getJSONObject(i).getJSONObject("config").getString("id").equals(id)) remaining.put(jobs.getJSONObject(i));
+        prefs.edit().putString("jobs", remaining.toString()).commit();
+    }
+    private JSONArray localJobs() throws Exception {
+        JSONArray jobs = jobs(), result = new JSONArray();
+        for (int i = 0; i < jobs.length(); i++) {
+            JSONObject config = jobs.getJSONObject(i).getJSONObject("config");
+            result.put(new JSONObject().put("id", config.getString("id")).put("title", config.getString("title")).put("status", "unknown"));
+        }
+        return result;
+    }
+    JSONObject queue() throws Exception {
+        JSONObject remote = request(requirePair(), "GET", "/v1/jobs", null);
+        JSONArray known = localJobs(), all = remote.getJSONArray("jobs"), result = new JSONArray();
+        for (int i = 0; i < known.length(); i++) {
+            JSONObject item = known.getJSONObject(i); boolean found = false;
+            for (int j = 0; j < all.length(); j++) if (item.getString("id").equals(all.getJSONObject(j).getString("id"))) { result.put(all.getJSONObject(j));found = true;break; }
+            if (!found) result.put(item.put("status", "missing"));
+        }
+        return new JSONObject().put("jobs", result);
+    }
     private JSONObject requirePair() throws Exception { JSONObject pair = pairing(); if (pair == null) throw new IOException("Pair the PC companion first."); return pair; }
     private void checkVersion(JSONObject info) throws Exception {
-        if (info.optInt("protocol") != 1 || !rendererVersion().equals(info.optString("rendererVersion"))) throw new IOException("Update the phone and PC companion together: their renderers must match.");
+        if (info.optInt("protocol") != 2 || !rendererVersion().equals(info.optString("rendererVersion"))) throw new IOException("Update the phone and PC companion together: their export protocol and renderers must match.");
     }
     JSONObject available() throws Exception {
         JSONObject pair = pairing();
@@ -77,7 +121,7 @@ final class VisualMusicPc {
         catch (Exception error) { return new JSONObject().put("available", false).put("reason", error.getMessage()); }
     }
     JSONObject begin(JSONObject song, JSONObject options, DownloadRuntime.Progress progress) throws Exception {
-        if (hasJob()) throw new IOException("Finish or remove your pending PC export first.");
+        if (jobs().length() >= 16) throw new IOException("Save or remove an existing PC export first (16 retained jobs).");
         JSONObject pair = requirePair(); checkVersion(request(pair, "GET", "/v1/info", null));
         File dir = library.song(song.getString("id"));
         JSONObject config = new JSONObject();
@@ -87,11 +131,12 @@ final class VisualMusicPc {
                 .put("sourceBytes", new File(dir, "source").length()).put("analysisBytes", new File(dir, "analysis.f32").length());
         JSONObject saved = new JSONObject().put("songId", song.getString("id")).put("config", config);
         // Persist before creating the remote job: retrying uses the same id after an uncertain response.
-        prefs.edit().putString("job", saved.toString()).commit();
-        return resume(progress);
+        add(saved);
+        return resume(config.getString("id"), progress);
     }
-    JSONObject resume(DownloadRuntime.Progress progress) throws Exception {
-        JSONObject pair = requirePair(), saved = saved(), config = saved.getJSONObject("config");
+    JSONObject resume(DownloadRuntime.Progress progress) throws Exception { return resume("", progress); }
+    JSONObject resume(String id, DownloadRuntime.Progress progress) throws Exception {
+        JSONObject pair = requirePair(), saved = saved(id), config = saved.getJSONObject("config");
         checkVersion(request(pair, "GET", "/v1/info", null));
         JSONObject job = request(pair, "POST", "/v1/jobs", config);
         if (job.getString("status").equals("uploading")) {
@@ -101,22 +146,36 @@ final class VisualMusicPc {
                 if (file.length() != config.getLong(name.equals("source") ? "sourceBytes" : "analysisBytes")) throw new IOException("Source changed. Remove this PC job and start a new export.");
                 upload(pair, config.getString("id"), name, file, progress);
             }
-            job = request(pair, "POST", path(config) + "/start", new JSONObject());
         }
+        if (Arrays.asList("uploading", "paused", "failed").contains(job.getString("status")))
+            job = request(pair, "POST", path(config) + "/start", new JSONObject());
         return job;
     }
-    private JSONObject saved() throws Exception { if (!hasJob()) throw new IOException("No pending PC export."); return new JSONObject(prefs.getString("job", "{}")); }
+    private JSONObject saved(String id) throws Exception {
+        JSONArray jobs = jobs();
+        // Keep the original native API for existing callers; UI actions always
+        // carry a job id so polling or another completed job cannot retarget them.
+        for (int i = 0; i < jobs.length(); i++) {
+            JSONObject saved = jobs.getJSONObject(i);
+            if (id.isEmpty() || saved.getJSONObject("config").getString("id").equals(id)) return saved;
+        }
+        throw new IOException("This PC export is no longer pending.");
+    }
     private String path(JSONObject config) throws JSONException { return "/v1/jobs/" + config.getString("id"); }
-    JSONObject status() throws Exception { return request(requirePair(), "GET", path(saved().getJSONObject("config")), null); }
-    void remove() throws Exception {
-        JSONObject pair = requirePair();
-        try { request(pair, "DELETE", path(saved().getJSONObject("config")), null); }
+    JSONObject status() throws Exception { return status(""); }
+    JSONObject status(String id) throws Exception { return request(requirePair(), "GET", path(saved(id).getJSONObject("config")), null); }
+    JSONObject pause(String id) throws Exception { return request(requirePair(), "POST", path(saved(id).getJSONObject("config")) + "/pause", new JSONObject()); }
+    void remove() throws Exception { remove(""); }
+    void remove(String id) throws Exception {
+        JSONObject pair = requirePair(), config = saved(id).getJSONObject("config");
+        try { request(pair, "DELETE", path(config), null); }
         catch (RemoteException error) { if (error.code != 404) throw error; }
-        prefs.edit().remove("job").commit();
+        retire(config.getString("id"));
     }
     void cancelIo() { cancelled = true; HttpsURLConnection connection = active; if (connection != null) connection.disconnect(); }
-    JSONObject download(DownloadRuntime.Progress progress) throws Exception {
-        JSONObject saved = saved(), config = saved.getJSONObject("config"), pair = requirePair();
+    JSONObject download(DownloadRuntime.Progress progress) throws Exception { return download("", progress); }
+    JSONObject download(String id, DownloadRuntime.Progress progress) throws Exception {
+        JSONObject saved = saved(id), config = saved.getJSONObject("config"), pair = requirePair();
         JSONObject job = request(pair, "GET", path(config), null);
         if (!job.getString("status").equals("complete")) throw new IOException("The PC is still exporting.");
         String extension = job.getString("extension");
@@ -144,7 +203,7 @@ final class VisualMusicPc {
             String title = config.getString("title").replaceAll("[^\\p{L}\\p{N} _-]", ""); if (title.length() > 80) title = title.substring(0, 80);
             Uri uri = library.publish(temporary, (title.isEmpty() ? "Visualizer" : title) + "-visualizer." + extension, extension.equals("mp4") ? "video/mp4" : "video/x-matroska");
             // Publish first, then retire the pending entry. A network failure cannot lose the phone copy.
-            prefs.edit().remove("job").commit();
+            retire(config.getString("id"));
             try { request(pair, "DELETE", path(config), null); } catch (Exception ignored) { }
             return new JSONObject().put("uri", uri.toString()).put("extension", extension).put("encoder", "Paired PC");
         } finally { if (connection != null) connection.disconnect(); active = null; temporary.delete(); }
