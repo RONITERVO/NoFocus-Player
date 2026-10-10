@@ -1,5 +1,7 @@
 # NoFocus PC export companion
 
+**Normal use:** open the NoFocus Windows app. It bundles and automatically starts this engine, displays its queue, and pairs audio and exports with one QR scan. The instructions below are for the optional standalone developer launcher. See [the integrated Windows app](../docs/windows-companion.md).
+
 The phone sends its unchanged source media, exact mono analysis, timed lyrics and export settings over pinned HTTPS. This companion draws every frame using the same vendored Visual-Music-Lyrics canvas renderer and fonts, and uses hardware H.264 when supported, then muxes the encoded frames with the original audio using FFmpeg. A persistent loopback binary connection also carries raw RGBA for lossless RGB and software fallback. It does not send phone-rendered frames over Wi-Fi. The existing Visual-Music-Lyrics desktop server and PC audio streaming protocol are unchanged.
 
 ## Use

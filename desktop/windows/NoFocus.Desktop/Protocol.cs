@@ -7,6 +7,7 @@ namespace NoFocus.Desktop;
 internal static class Protocol
 {
     internal const int Port = 39821;
+    internal const int ReceiverPort = 39822;
     internal const int SampleRate = 48_000;
     internal const int Channels = 2;
     internal const int FramesPerPacket = 240;
@@ -80,6 +81,46 @@ internal static class Protocol
             return false;
         byte[] expected = HMACSHA256.HashData(key, packet[..16]);
         return CryptographicOperations.FixedTimeEquals(expected.AsSpan(0, 16), packet[16..32]);
+    }
+
+    internal static byte[] CreateAcknowledgement(byte[] key, ulong sessionId)
+    {
+        byte[] packet = new byte[32];
+        "NFP2\x02\x03\0\x20"u8.CopyTo(packet);
+        BinaryPrimitives.WriteUInt64BigEndian(packet.AsSpan(8), sessionId);
+        HMACSHA256.HashData(key, packet.AsSpan(0, 16)).AsSpan(0, 16).CopyTo(packet.AsSpan(16));
+        return packet;
+    }
+
+    internal static bool TryHello(ReadOnlySpan<byte> packet, byte[] key, out ulong session)
+    {
+        session = 0;
+        if (packet.Length != 64 || !packet[..8].SequenceEqual("NFP2\x02\x01\0\x40"u8)
+            || BinaryPrimitives.ReadUInt32BigEndian(packet[16..]) != SampleRate
+            || packet[20] != Channels || packet[21] != 2
+            || BinaryPrimitives.ReadUInt16BigEndian(packet[22..]) != FramesPerPacket) return false;
+        byte[] authentication = HMACSHA256.HashData(key, packet[..48]);
+        if (!CryptographicOperations.FixedTimeEquals(authentication.AsSpan(0, 16), packet[48..])) return false;
+        session = BinaryPrimitives.ReadUInt64BigEndian(packet[8..]);
+        return true;
+    }
+
+    internal static bool TryAudio(ReadOnlySpan<byte> packet, AesGcm aes, ulong session, out uint sequence, out byte[] pcm)
+    {
+        sequence = 0; pcm = [];
+        if (packet.Length != 32 + PcmBytesPerPacket + 16 || !packet[..8].SequenceEqual("NFP2\x02\x02\0\x20"u8)
+            || BinaryPrimitives.ReadUInt64BigEndian(packet[8..]) != session
+            || BinaryPrimitives.ReadUInt16BigEndian(packet[28..]) != FramesPerPacket
+            || BinaryPrimitives.ReadUInt16BigEndian(packet[30..]) != PcmBytesPerPacket + 16) return false;
+        sequence = BinaryPrimitives.ReadUInt32BigEndian(packet[16..]);
+        if (BinaryPrimitives.ReadUInt64BigEndian(packet[20..]) != (ulong)sequence * FramesPerPacket) return false;
+        Span<byte> nonce = stackalloc byte[12];
+        packet.Slice(8, 12).CopyTo(nonce);
+        byte[] decoded = new byte[PcmBytesPerPacket];
+        try { aes.Decrypt(nonce, packet.Slice(32, PcmBytesPerPacket), packet[^16..], decoded, packet[..32]); }
+        catch (CryptographicException) { return false; }
+        pcm = decoded;
+        return true;
     }
 
     internal static void SelfTest()

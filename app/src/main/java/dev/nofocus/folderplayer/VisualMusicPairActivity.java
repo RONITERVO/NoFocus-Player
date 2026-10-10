@@ -1,44 +1,57 @@
 package dev.nofocus.folderplayer;
 
 import android.app.*;
-import android.content.Intent;
-import android.os.Bundle;
+import android.content.*;
+import android.os.*;
+import android.view.*;
 import android.widget.*;
 import org.json.JSONObject;
 
-/** Camera-scanned pairing links require a visible tap before saving a trusted PC. */
+/** One explicit pairing approval covers audio and exports; scanning never starts capture. */
 public final class VisualMusicPairActivity extends Activity {
     private VisualMusicPc client;
+    private TextView status;
+    private Button pair, paste;
+    private String code = "";
+    private boolean busy;
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        try {
-            if (android.os.Build.VERSION.SDK_INT < 29) throw new java.io.IOException("Visual music needs Android 10 or newer.");
-            String code = getIntent().getDataString();
-            JSONObject pair = VisualMusicPc.parsePairing(code == null ? "" : code);
-            LinearLayout layout = new LinearLayout(this);layout.setOrientation(LinearLayout.VERTICAL);
-            ScrollView scroll = new ScrollView(this);scroll.setFillViewport(true);scroll.addView(layout);
-            final int padding = Math.round(20 * getResources().getDisplayMetrics().density);
-            scroll.setOnApplyWindowInsetsListener((view,insets) -> {
-                if (android.os.Build.VERSION.SDK_INT >= 30) {
-                    android.graphics.Insets safe = insets.getInsets(android.view.WindowInsets.Type.systemBars() | android.view.WindowInsets.Type.displayCutout());
-                    view.setPadding(safe.left + padding,safe.top + padding,safe.right + padding,safe.bottom + padding);
-                } else view.setPadding(insets.getSystemWindowInsetLeft() + padding,insets.getSystemWindowInsetTop() + padding,insets.getSystemWindowInsetRight() + padding,insets.getSystemWindowInsetBottom() + padding);
-                return insets;
-            });
-            TextView label = new TextView(this);label.setTextSize(20);label.setText("Pair NoFocus PC export\n\n" + pair.optString("name") + "\n" + pair.getString("url") + "\n\nOnly pair a code displayed by your own PC companion.");layout.addView(label);
-            Button button = new Button(this);button.setText("Pair PC");layout.addView(button);
-            Button cancel = new Button(this);cancel.setText("Cancel");cancel.setOnClickListener(v -> finish());layout.addView(cancel);setContentView(scroll);scroll.requestApplyInsets();
-            client = new VisualMusicPc(new VisualMusicLibrary(this));
-            button.setOnClickListener(v -> {
-                button.setEnabled(false);label.setText("Connecting securely to " + pair.optString("name") + "…");
-                new Thread(() -> {
-                    try {
-                        client.pair(code);
-                        runOnUiThread(() -> {if (!isFinishing()) {startActivity(new Intent(this,VisualMusicActivity.class));finish();}});
-                    } catch (Exception error) {runOnUiThread(() -> {label.setText(error.getMessage());button.setEnabled(true);});}
-                },"visual-pc-pair").start();
-            });
-        } catch (Exception error) {new AlertDialog.Builder(this).setMessage("Invalid NoFocus PC pairing link.").setPositiveButton("Close",(d,w) -> finish()).setOnCancelListener(d -> finish()).show();}
+        if (Build.VERSION.SDK_INT < 29) { new AlertDialog.Builder(this).setMessage("Unified pairing requires Android 10 or newer. Manual audio setup is still available.").setPositiveButton("Close", (d,w) -> finish()).show(); return; }
+        client = new VisualMusicPc(new VisualMusicLibrary(this));
+        code = getIntent().getDataString(); if (code == null) code = saved == null ? "" : saved.getString("code", "");
+        PcPage page = new PcPage(this, "Connect PC"); status = page.status;
+        pair = page.button("Pair PC","Pair",v -> pair());
+        paste = page.button("Paste code","Paste",v -> {
+            ClipboardManager clipboard=(ClipboardManager)getSystemService(CLIPBOARD_SERVICE);
+            if(clipboard.hasPrimaryClip() && clipboard.getPrimaryClip().getItemCount()>0) code=clipboard.getPrimaryClip().getItemAt(0).coerceToText(this).toString();
+            showCode();
+        });
+        page.button("Help","Help",v -> new AlertDialog.Builder(this).setMessage("Open NoFocus on Windows and choose Pair phone. Scan its QR code with your phone camera, or paste its pairing code here. Both devices need the same home network. One pairing connects audio in both directions and video exports. Only pair your own PC.").setPositiveButton("OK",null).show());
+        showCode();
     }
-    @Override protected void onDestroy() {if (client != null) client.cancelIo();super.onDestroy();}
+    private void showCode() {
+        pair.setEnabled(false);
+        if(code.isEmpty()) { status.setText("On Windows: Pair phone\nScan the QR code or paste its code here.");return; }
+        try { JSONObject data=VisualMusicPc.parsePairing(code);status.setText("Connect to " + data.optString("name","your PC") + "?\nAudio + video exports");pair.setEnabled(!busy); }
+        catch(Exception e) {status.setText("That code is not a NoFocus PC pairing code. Copy it from Pair phone on Windows.");}
+    }
+    private void pair() {
+        if(busy)return;
+        if (Build.VERSION.SDK_INT >= 36 && checkSelfPermission(networkPermission()) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{networkPermission()}, 81); return;
+        }
+        busy=true;pair.setEnabled(false);paste.setEnabled(false);status.setText("Connecting…");
+        final String approvedCode = code;
+        new Thread(() -> {
+            try {client.pair(approvedCode);runOnUiThread(() -> {if(!isFinishing() && !isDestroyed()) {Toast.makeText(this,"PC paired",Toast.LENGTH_LONG).show();startActivity(new Intent(this,MainActivity.class).putExtra("pcSetup",true).addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP));finish();}});}
+            catch(Exception e) {runOnUiThread(() -> {if(!isFinishing() && !isDestroyed()) {busy=false;status.setText(e.getMessage());pair.setEnabled(true);paste.setEnabled(true);}});}
+        },"pair-pc").start();
+    }
+    private String networkPermission() { return Build.VERSION.SDK_INT >= 37 ? "android.permission.ACCESS_LOCAL_NETWORK" : "android.permission.NEARBY_WIFI_DEVICES"; }
+    @Override public void onRequestPermissionsResult(int request,String[] permissions,int[] grants) {
+        super.onRequestPermissionsResult(request,permissions,grants);
+        if(request==81) {if(grants.length>0 && grants[0]==android.content.pm.PackageManager.PERMISSION_GRANTED)pair();else status.setText("Allow nearby devices in Settings to connect to your PC.");}
+    }
+    @Override protected void onSaveInstanceState(Bundle out){out.putString("code",code);super.onSaveInstanceState(out);}
+    @Override protected void onDestroy(){if(client!=null)client.cancelIo();super.onDestroy();}
 }

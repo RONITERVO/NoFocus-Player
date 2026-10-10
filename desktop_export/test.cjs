@@ -28,6 +28,38 @@ async function wait(pair,id) {
   }
   throw new Error('PC rendering timed out');
 }
+test('unified pairing persists both directions, uses observed addresses and protects desktop controls', async () => {
+  const {audioCodes,localIpv4} = require('./desktop.cjs');
+  const state = await fsp.mkdtemp(path.join(os.tmpdir(),'nofocus-pair-test-'));
+  let app;
+  try {
+    app = await start({state,port:0,host:'127.0.0.1'});let pair = app.pairing('127.0.0.1');
+    assert.equal((await request(pair,'GET','/v1/info')).json().desktopProtocol,1);
+    const details = {id:crypto.randomUUID(),name:'Test phone',address:'10.9.8.7'};
+    assert.equal((await request({...pair,token:'wrong'},'POST','/v1/connect',details)).status,401);
+    assert.equal((await request(pair,'POST','/v1/connect',details,{Origin:'https://example.test'})).status,401);
+    assert.equal((await request(pair,'POST','/v1/connect',{...details,name:'x'.repeat(101)})).status,400);
+    const audio = (await request(pair,'POST','/v1/connect',details)).json().audio;
+    assert.match(audio.toPhone,/^[A-Z2-7]{16}$/);assert.match(audio.toPc,/^[A-Z2-7]{16}$/);
+    assert.notEqual(audio.toPhone,audio.toPc);assert.deepEqual(audio,audioCodes(pair.token));
+    assert.notDeepEqual(audio,audioCodes('00'.repeat(32)));
+    const desktop = (await request(pair,'GET','/v1/desktop')).json();
+    assert.equal(desktop.phone.address,'127.0.0.1');assert.equal(desktop.phone.name,details.name);
+    assert.equal((await request({...pair,token:'bad'},'GET','/v1/desktop/pairings')).status,401);
+    assert.ok(localIpv4('192.168.1.255'));assert.ok(!localIpv4('8.8.8.8'));assert.ok(!localIpv4('10.300.2.3'));
+    await app.close();app = await start({state,port:0,host:'127.0.0.1'});pair = app.pairing('127.0.0.1');
+    assert.deepEqual((await request(pair,'GET','/v1/desktop')).json(),desktop);
+    await app.close();app = null;
+    await fsp.unlink(path.join(state,'identity.json'));
+    app = await start({state,port:0,host:'127.0.0.1'});pair = app.pairing('127.0.0.1');
+    const rotated = (await request(pair,'GET','/v1/desktop')).json();
+    assert.equal(rotated.phone,null,'revoking the identity must forget the old phone');
+    assert.notDeepEqual(rotated.audio,audio);
+    await request(pair,'POST','/v1/connect',details);
+    await app.close();app = await start({state,port:0,host:'127.0.0.1'});pair = app.pairing('127.0.0.1');
+    assert.equal((await request(pair,'GET','/v1/desktop')).json().phone.name,details.name,'new pairing survives restart');
+  } finally {if(app)await app.close();await fsp.rm(state,{recursive:true,force:true});}
+});
 test('authenticated PC rendering, exact audio/RGB, hardware parity, queue recovery and cancellation', {timeout:180000}, async t => {
   const state=await fsp.mkdtemp(path.join(os.tmpdir(),'nofocus-export-test-'));
   let app;

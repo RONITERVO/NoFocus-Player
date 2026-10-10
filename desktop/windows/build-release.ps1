@@ -4,6 +4,7 @@ param(
 
 $ErrorActionPreference = "Stop"
 $project = Join-Path $PSScriptRoot "NoFocus.Desktop\NoFocus.Desktop.csproj"
+& (Join-Path $PSScriptRoot 'package-companion.ps1')
 
 dotnet publish $project `
     --configuration Release `
@@ -12,6 +13,7 @@ dotnet publish $project `
     --output $OutputDirectory `
     -p:PublishSingleFile=true `
     -p:IncludeNativeLibrariesForSelfExtract=true
+if ($LASTEXITCODE -ne 0) { throw 'Windows build failed.' }
 
 $executable = Join-Path $OutputDirectory "NoFocus Speaker.exe"
 if (-not (Test-Path -LiteralPath $executable)) {

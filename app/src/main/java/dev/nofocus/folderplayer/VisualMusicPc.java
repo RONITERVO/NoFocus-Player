@@ -54,13 +54,49 @@ final class VisualMusicPc {
         prefs.edit().putString("target", target).apply();
     }
     JSONObject pair(String code) throws Exception {
-        if (hasJob()) throw new IOException("Finish or remove the pending PC exports before changing pairing.");
-        JSONObject pair = parsePairing(code); JSONObject info = request(pair, "GET", "/v1/info", null);
+        JSONObject pair = parsePairing(code), old = pairing();
+        if (hasJob() && (old == null || !old.getString("token").equals(pair.getString("token"))
+                || !old.getString("fingerprint").equals(pair.getString("fingerprint"))))
+            throw new IOException("Save or remove the pending PC exports before pairing a different PC.");
+        JSONObject info = request(pair, "GET", "/v1/info", null);
         checkVersion(info); pair.put("name", info.getString("name"));
+        if (info.optInt("desktopProtocol") == 1) {
+            connectAudio(pair);
+            pair.put("desktop", 1);
+        }
         prefs.edit().putString("pair", pair.toString()).commit(); return settings();
+    }
+    // Called on a worker when opening PC controls. Refreshes the phone's address
+    // through the authenticated connection, without another QR scan.
+    void refreshConnection() throws Exception {
+        JSONObject pair = pairing();
+        if (pair != null && pair.optInt("desktop") == 1) connectAudio(pair);
+    }
+    private void connectAudio(JSONObject pair) throws Exception {
+        String id = prefs.getString("phone-id", "");
+        if (id.isEmpty()) { id = UUID.randomUUID().toString(); prefs.edit().putString("phone-id", id).commit(); }
+        JSONObject info = request(pair, "POST", "/v1/connect", new JSONObject().put("id", id).put("name", android.os.Build.MODEL));
+        JSONObject audio = info.getJSONObject("audio");
+        String toPhone = audio.getString("toPhone"), toPc = audio.getString("toPc");
+        if (!toPhone.matches("[A-Z2-7]{16}") || !toPc.matches("[A-Z2-7]{16}")) throw new IOException("Update the Windows app to pair audio.");
+        Context context = library.context;
+        SharedPreferences playback = context.getSharedPreferences(PlayerService.PREFS, 0);
+        SharedPreferences outgoing = context.getSharedPreferences(PhoneAudioService.PREFS, 0);
+        if (!toPhone.equals(playback.getString(WifiStreamService.PREF_PAIRING_CODE, ""))) context.stopService(new Intent(context, WifiStreamService.class));
+        if (!toPc.equals(outgoing.getString("code", ""))) context.stopService(new Intent(context, PhoneAudioService.class));
+        playback.edit().putString(WifiStreamService.PREF_PAIRING_CODE, toPhone).commit();
+        outgoing.edit().putString("host", new URI(pair.getString("url")).getHost()).putString("code", toPc)
+                .putString("name", info.getString("name")).putBoolean("unified", true).commit();
     }
     void forget() throws Exception {
         if (hasJob()) throw new IOException("Finish or remove the pending PC exports before forgetting this PC.");
+        JSONObject current = pairing();
+        if (current != null && current.optInt("desktop") == 1) {
+            library.context.stopService(new Intent(library.context, WifiStreamService.class));
+            library.context.stopService(new Intent(library.context, PhoneAudioService.class));
+            library.context.getSharedPreferences(PhoneAudioService.PREFS, 0).edit().clear().commit();
+            library.context.getSharedPreferences(PlayerService.PREFS, 0).edit().putString(WifiStreamService.PREF_PAIRING_CODE, PairingCode.generate()).commit();
+        }
         prefs.edit().remove("pair").apply();
     }
     private JSONObject pairing() throws JSONException { String value = prefs.getString("pair", ""); return value.isEmpty() ? null : new JSONObject(value); }

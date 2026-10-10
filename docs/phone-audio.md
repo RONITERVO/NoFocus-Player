@@ -1,0 +1,38 @@
+# Phone audio to Windows
+
+The native Windows app is the maintained streamer in both directions. The standalone Python sender was retired at the user's request; recover it from commit `1603fec` if needed. This does not remove the Android downloader's bundled Python runtime.
+
+## Protocol and audio contract
+
+Phone → PC uses **NFP3 version 3** on UDP 39822, introduced in Android 1.10.1 and Windows 1.5.1. Both ends must update together; reverse v2 is rejected without downgrade. Pairing codes remain valid. Original PC → phone NFP2 v2 remains on UDP 39821. Discovery still uses the eight-byte v2 service marker, with the receiver port in its final two bytes. Discovery reveals no code and is not proof of identity. [Unified pairing](windows-companion.md) supplies distinct secrets for both directions; manual setup still accepts independent codes.
+
+The v3 handshake uses a 64-byte root-key-authenticated hello, a 48-byte challenge containing a fresh random 128-bit receiver nonce, a 48-byte confirmation and a 32-byte ready acknowledgement. The session key is HMAC-SHA256(root key, ASCII `NoFocus phone-to-PC v3 session` followed by the big-endian 64-bit session ID and nonce). Confirmation and acknowledgement use that key; the challenge uses the root key. Message types and protocol version are authenticated. The receiver does not reserve the active stream until key confirmation succeeds. Up to eight pending challenges are bound to source endpoint/session and expire after five seconds. Timeouts and listener restarts require new challenges, so replaying a previously recorded hello, confirmation and audio cannot reactivate it or lock out a fresh phone.
+
+Each 1,008-byte audio datagram carries 240 frames of little-endian, signed 16-bit stereo PCM at 48 kHz, protected by AES-256-GCM. The random session ID and monotonic sequence form the nonce. The sender repeats the preceding encrypted packet to recover isolated loss. It rejects sequence overflow and caps a sharing session at 12 hours.
+
+The PC locks an active session to one authenticated endpoint, ignores malformed/unauthenticated packets, rejects duplicates and played sequences, and retires idle sessions after three seconds. AES-GCM uses the freshly derived session key. The phone waits for authenticated key confirmation before capturing audio and stops after five seconds without an authenticated acknowledgement. A restarted listener requires restarting phone sharing.
+
+The pull-driven Windows buffer reorders packets, inserts silence for unrecovered network gaps, and bounds stale audio after an actual outage or scheduler stall. Live playout uses the existing NAudio/WDL 64-tap sinc resampler, floating-point stereo output and a smoothed queue-depth PI controller. Correction is limited to ±1,500 ppm and changes by at most 500 ppm/second. The 10/20/40 ms cushion is retained in addition to an output callback (processed in chunks of at most 20 ms), filter lookahead, Android capture and device/network latency. Resampler history resets between sessions. Ordinary clock drift is handled through a small continuous rate adjustment rather than packet drops or inserted silence. No lossy codec is used, but resampled live output is not byte-identical to the captured samples. Transport PCM and preserve-original video exports are unaffected.
+
+Only Android playback capture is used. No microphone source, audio focus, screen frame, cloud request or recording file is involved. The foreground notification and Android's sharing indicator remain visible. Starting reverse mode stops the phone's PC receiver; the Windows UI stops its sender before opening the reverse receiver. Android capture revocation, timeout, explicit stop and activity destruction must not leave a capture running invisibly.
+
+## Verification
+
+`dotnet run --project desktop/windows/NoFocus.Desktop/NoFocus.Desktop.csproj -c Release -- --self-test` verifies original sender protocol/downloader checks, Java/Windows v2 and v3 fixtures, exact transport PCM, tampering, reordering, loss concealment, duplicate rejection, bounded buffering, real loopback UDP challenge/confirmation, competing endpoint rejection, malformed traffic, and replay of captured sessions after timeout/restart. It also tests seven accelerated ten-minute clock scenarios (0/±100/±1,000 ppm, all buffer settings and delayed/reordered delivery), gain/channel isolation at 20 Hz/1/10/20 kHz, and stale manual-settings preservation. It does not require a sound device or emit audio.
+
+`.\gradlew.bat :app:testDebugUnitTest :app:lintDebug :app:assembleDebug :app:assembleDebugAndroidTest` checks Android code, protocol fixtures, sequence exhaustion, discovery direction and address validation, and builds both APKs.
+
+Before the v3 and drift-compensation update on 2026-10-10, the Honor 400 Pro passed the real Android capture test with a separate synthetic-tone app, authenticated PCM, continued streaming after leaving setup, and explicit stop/notification cleanup. An API 36 emulator also passed automatic shutdown when PC acknowledgements stopped. That Honor → Windows Wi-Fi test used the production sender/receiver and WASAPI default output: 2,401 unique packets, 2,326 non-silent packets, 2 concealed gaps, and no stale-buffer trimming across about 12 seconds of capture (the receiver test also includes startup/shutdown). This is a connectivity/output smoke test, not an acoustic latency measurement or proof of zero packet loss.
+
+The updated Android 1.10.1 on an API 36 emulator passed real playback capture through Windows 1.5.1's v3 listener and WASAPI output on the same date: 2,352 unique packets, 2,298 non-silent, 8 concealed gaps and 27 trimmed packets over about 12 seconds. This emulator/host smoke test verifies capture, handshake, decryption and output, but is not a clean-network audio-quality benchmark; the accelerated independent-clock tests above isolate drift from scheduling/network disruption. The updated emulator also passed receiver-loss shutdown and notification cleanup. The physical Honor's final v3 listening check remains outstanding.
+
+The original compact UI regression covered 17 screens. The integrated Windows companion update adds compact phone listening, pairing and unified settings coverage; see [its validation record](windows-companion.md#validation). Everyday streaming controls have no scrolling; manual input and longer help are separate dialogs. Windows builds and protocol/downloader self-tests passed. Android unit tests and lint passed (zero lint errors).
+
+Suno's current playback-capture policy, phone-volume behavior and lock-screen behavior still need checking with real listening. Existing PC → phone benchmarks in the main README are not measurements of this new reverse direction.
+
+Device test command (approve Android's normal sharing dialog):
+```powershell
+adb -s <serial> shell am instrument -w -e phoneAudio true dev.nofocus.folderplayer.test/dev.nofocus.folderplayer.CompactUiTest
+# Add -e timeout true to test a lost receiver instead of an explicit stop.
+```
+The test restores the prior pairing preferences and stops its synthetic tone. A developer Windows output test is available through `--receive-headless --code-file <path> --duration <seconds>`; the code file contains a temporary 16-character code. The Android instrumentation can target that listener with `-e pcHost <address> -e pcCode <same-code>`. Use test-only codes, and remove temporary code files afterward.

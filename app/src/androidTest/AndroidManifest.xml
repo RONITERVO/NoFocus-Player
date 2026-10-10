@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
     <application android:allowAudioPlaybackCapture="true">
-        <activity android:name="dev.nofocus.folderplayer.CaptureToneActivity" android:exported="true" />
+        <activity android:name="dev.nofocus.folderplayer.CaptureToneActivity" android:exported="true" android:launchMode="singleTask" />
     </application>
 </manifest>

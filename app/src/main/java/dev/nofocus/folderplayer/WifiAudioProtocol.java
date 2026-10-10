@@ -16,6 +16,9 @@ import javax.crypto.spec.SecretKeySpec;
 /** Versioned, authenticated wire format shared with the desktop sender. */
 final class WifiAudioProtocol {
     static final int PORT = 39821;
+    static final int PC_RECEIVER_PORT = 39822;
+    static final int FRAMES_PER_PACKET = 240;
+    static final int PCM_BYTES = FRAMES_PER_PACKET * 4;
     static final int SAMPLE_RATE = 48_000;
     static final int CHANNELS = 2;
     static final int BYTES_PER_SAMPLE = 2;
@@ -119,6 +122,46 @@ final class WifiAudioProtocol {
         byte[] authentication = hmac(key, acknowledgement, 0, 16);
         System.arraycopy(authentication, 0, acknowledgement, 16, 16);
         return acknowledgement;
+    }
+
+    // Retain v2 packet creation for compatibility fixtures. Reverse audio uses PhoneAudioProtocol v3.
+    static byte[] createHello(byte[] key, long sessionId, String name) throws GeneralSecurityException {
+        byte[] packet = new byte[HELLO_SIZE];
+        ByteBuffer out = ByteBuffer.wrap(packet).order(ByteOrder.BIG_ENDIAN);
+        out.putInt(MAGIC).put(VERSION).put(TYPE_HELLO).putShort((short) HELLO_SIZE);
+        out.putLong(sessionId).putInt(SAMPLE_RATE).put((byte) CHANNELS).put((byte) BYTES_PER_SAMPLE)
+                .putShort((short) FRAMES_PER_PACKET);
+        out.put(Arrays.copyOf(name.getBytes(StandardCharsets.UTF_8), 24));
+        System.arraycopy(hmac(key, packet, 0, 48), 0, packet, 48, 16);
+        return packet;
+    }
+
+    static byte[] encryptAudio(byte[] key, long sessionId, long sequence, byte[] pcm) throws GeneralSecurityException {
+        if (pcm.length != PCM_BYTES || sequence < 0 || sequence > 0xffffffffL)
+            throw new GeneralSecurityException("Invalid PCM packet or exhausted session");
+        byte[] packet = new byte[AUDIO_HEADER_SIZE + PCM_BYTES + GCM_TAG_SIZE];
+        ByteBuffer out = ByteBuffer.wrap(packet).order(ByteOrder.BIG_ENDIAN);
+        out.putInt(MAGIC).put(VERSION).put(TYPE_AUDIO).putShort((short) AUDIO_HEADER_SIZE)
+                .putLong(sessionId).putInt((int) sequence).putLong(sequence * FRAMES_PER_PACKET)
+                .putShort((short) FRAMES_PER_PACKET).putShort((short) (PCM_BYTES + GCM_TAG_SIZE));
+        byte[] nonce = ByteBuffer.allocate(12).putLong(sessionId).putInt((int) sequence).array();
+        Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
+        cipher.init(Cipher.ENCRYPT_MODE, new SecretKeySpec(key, "AES"), new GCMParameterSpec(128, nonce));
+        cipher.updateAAD(packet, 0, AUDIO_HEADER_SIZE);
+        System.arraycopy(cipher.doFinal(pcm), 0, packet, AUDIO_HEADER_SIZE, PCM_BYTES + GCM_TAG_SIZE);
+        return packet;
+    }
+
+    static boolean isAcknowledgement(byte[] packet, int length, byte[] key, long sessionId) throws GeneralSecurityException {
+        return length == 32 && MessageDigest.isEqual(Arrays.copyOf(packet, length), helloAcknowledgement(sessionId, key));
+    }
+
+    static byte[] discoveryRequest() { return DISCOVERY_REQUEST.clone(); }
+
+    static boolean isPcDiscoveryResponse(byte[] packet, int length) {
+        byte[] expected = discoveryResponse();
+        expected[6] = (byte) (PC_RECEIVER_PORT >>> 8); expected[7] = (byte) PC_RECEIVER_PORT;
+        return length == expected.length && MessageDigest.isEqual(Arrays.copyOf(packet, length), expected);
     }
 
     private static boolean hasPrefix(byte[] packet, int length, byte type, int headerSize) {

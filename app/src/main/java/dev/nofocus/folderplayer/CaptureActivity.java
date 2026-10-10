@@ -84,6 +84,10 @@ public final class CaptureActivity extends Activity {
     }
 
     private void requestCapture() {
+        if (PhoneAudioService.running) {
+            Toast.makeText(this, "Stop phone audio sharing before capturing a lyrics video.", Toast.LENGTH_LONG).show();
+            return;
+        }
         if (Build.VERSION.SDK_INT < 29 || CaptureService.running) return;
         try {
             new CaptureTiming(CaptureTiming.START_DELAYS[delay.getSelectedItemPosition()], CaptureTiming.parseDuration(duration.getText().toString()));

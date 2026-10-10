@@ -1,19 +1,30 @@
 # NoFocus Player
 
-NoFocus Player lets an Android phone play either a local music folder or encrypted PC audio without requesting audio focus. YouTube, games, and other apps can therefore keep playing at the same time.
+NoFocus Player plays local music folders and streams encrypted audio in either direction between Android and Windows. It never requests Android audio focus, so YouTube, games, and other apps can keep playing at the same time.
 
-## Easy Wi-Fi speaker setup
+## One Windows app, one pairing
 
-Requirements: Windows 10/11, Android 6 or newer, and both devices on the same home network. A strong 5 GHz or 6 GHz connection is recommended.
+Open **NoFocus-Speaker-Windows-x64.exe**. The Windows home screen manages audio in both directions and your phone's video export queue. The export engine starts automatically in the background; Node.js, Python, .NET and a separate companion launcher are not needed. Video rendering uses Microsoft Edge installed on the PC.
 
-1. Install and open **NoFocus Player** on the phone.
-2. Select **PC audio** and tap **Start**. **Connect PC** shows the pairing code.
-3. Download and open **NoFocus-Speaker-Windows-x64.exe** on the PC. It is self-contained; Python and .NET do not need to be installed.
-4. The PC normally finds the phone automatically. Enter the pairing code shown on the phone once, then click **Start listening on phone**.
+1. Connect Windows and Android 10+ to the same home network.
+2. In Windows, choose **Pair phone**. Scan its QR code with the phone camera and tap **Pair PC** in NoFocus. Alternatively, copy its code into **PC audio → Connect PC → Pair PC → Paste code**.
+3. That one pairing configures PC → phone audio, phone → PC audio, and visualizer exports.
 
-The PC remembers its setup and protects the pairing code with the current Windows account. On later launches, streaming is one click. If automatic discovery is blocked by a router or VPN, find the phone address under **Connect PC → More options**. **Copy setup** on the phone and **Paste phone setup** on the PC provide another easy setup route when clipboard sync is enabled.
+For PC audio, choose **Listen on phone** in Windows and **PC audio → Start** on Android. For phone audio, choose **Listen on PC** in Windows and **PC audio → Connect PC → Listen on PC → Start phone audio** on Android. Approve Android sharing, then play Suno or another capturable media app. Windows plays through its default output/headphones. Only one audio direction runs at once; video exports can continue alongside either direction.
 
-The sender captures the default PC output, never the microphone. Changing the Windows default output device while streaming may require pressing Stop and Start once.
+On the phone, **Visuals → Export video → Automatic** uses the paired PC when it is reachable. Windows shows the queue with **Pause**, **Resume**, **Save video** and **Remove**. Fully uploaded jobs continue when you leave the phone app. Closing the Windows window keeps NoFocus running in the system tray; **Settings → Quit NoFocus** stops it. Reopening the desktop shortcut brings back the existing window. Interrupted rendering restarts from the beginning on the next launch without another upload.
+
+The phone keeps its paired PC and refreshes its own address when you open NoFocus. If the PC's address changes, scan its QR again; pending exports on the same PC remain intact. **Settings** contains audio buffering, song downloads, and older/manual audio setup. Android 6–9 can still use the manual PC → phone flow. The standalone developer export launcher remains available for compatibility.
+
+If Windows prompts, allow NoFocus's audio app and bundled Node runtime on your private network. Audio uses UDP **39821/39822**, and exports/pairing use pinned HTTPS on TCP **49632**. No cloud account is involved. See [Windows integration and migration](docs/windows-companion.md).
+
+## Audio quality
+
+The reverse stream transports captured **48 kHz stereo 16-bit PCM** without lossy encoding or network volume changes. It uses authenticated pairing, encrypted packets, a bounded reorder buffer, duplicate rejection and one-packet redundancy. Windows uses adaptive sinc resampling for live playback so small capture/output clock differences do not accumulate into packet-sized skips. Transported samples and preserved export audio remain unchanged; live output follows the sound device's clock. Congested networks can still cause gaps. Android capture/mixing/resampling and the Windows mixer/output device can affect the final sound; this is not a bit-perfect copy of an app's source file.
+
+Android only captures media/game audio from apps that permit playback capture. Calls, microphone input and protected apps are not supported. No screen frames or audio files are recorded. The phone may continue playing locally, and muting phone media can also mute capture depending on the device. Android may end sharing when the screen locks; unlock and start again. Disconnection ends the phone session after five seconds. Lyrics-video capture and reverse streaming require separate sharing sessions. Starting the original PC → phone mode stops reverse streaming to prevent a feedback loop.
+
+See [phone audio validation and protocol](docs/phone-audio.md) for verification and remaining device checks.
 
 ## Performance
 
@@ -26,7 +37,7 @@ The native Windows sender uses:
 - AES-GCM accelerated by the PC runtime; and
 - one-packet time diversity, recovering an isolated Wi-Fi loss without a round trip.
 
-On the tested 32-logical-core Windows PC, the native app used roughly 35-39 MB working memory and 0.1-0.3 CPU-seconds per 25 seconds. With all logical processors deliberately saturated, it still sent 5,002 primary packets in 25 seconds and the phone reported zero gaps.
+In the earlier audio-only benchmark on a 32-logical-core Windows PC, the native app used roughly 35-39 MB working memory and 0.1-0.3 CPU-seconds per 25 seconds. With all logical processors deliberately saturated, it still sent 5,002 primary packets in 25 seconds and the phone reported zero gaps. These figures exclude the integrated export engine and active video rendering.
 
 ## Latency and quality
 
@@ -42,16 +53,17 @@ Literal zero latency is physically impossible. PC capture, Wi-Fi scheduling, And
 
 ## Privacy and security
 
-- A random 80-bit pairing secret is generated on the phone and can be rotated.
-- Windows stores the remembered secret with DPAPI for the current Windows account.
+- Unified pairing derives separate 80-bit audio secrets from the PC's random 256-bit export token. The pinned certificate and token remain in the current user's local companion state.
+- Older/manual audio setup uses independently generated 80-bit codes. Its remembered Windows codes use DPAPI for the current Windows account.
 - Hello packets use HMAC-SHA-256 authentication.
 - Every PCM packet is encrypted and authenticated with AES-256-GCM.
+- Phone → PC v3 derives a fresh audio key from a random receiver challenge and requires proof before accepting audio. Captured sessions cannot be replayed after a timeout or listener restart. Update Android to **1.10.1** and Windows to **1.5.1** together; the earlier reverse v2 protocol is rejected. Existing pairing codes remain usable.
 - Sessions use a random 64-bit ID and monotonic packet sequence.
 - The phone locks an active session to one source, rejects replayed/duplicate frames, bounds all buffers, and times out dead sessions.
 - Discovery exchanges only an eight-byte service marker and port. It never exposes the pairing secret.
 - The pairing secret is excluded from Android backup.
 
-Audio is sent directly over the local network on UDP port `39821`; there is no cloud service or telemetry.
+Audio is sent directly over the local network on UDP ports `39821` and `39822`; there is no cloud service or telemetry.
 
 ## Folder player
 
@@ -73,7 +85,7 @@ Visual music requires Android 10+, imports up to 768 MB / 20 minutes, and space 
 
 ## PC-assisted video export
 
-Run [desktop_export/start.cmd](desktop_export/start.cmd) on the PC (Node.js 22+ and Edge), scan its QR code with the phone camera, and tap **Pair PC**. Or paste its code into **Visuals / Export video / Pair PC**. The companion draws and encodes on the PC; the phone uploads original media, analysis, timings and settings once, then retrieves the finished video. Preserved audio stays untouched.
+Open the Windows app and pair once as described above. The bundled companion draws and encodes on the PC; the phone uploads original media, analysis, timings and settings once, then retrieves the finished video. Preserved audio stays untouched.
 
 **Automatic** uses the paired PC when available and the phone otherwise. **This phone** and **Paired PC** explicitly select the destination. Fully uploaded PC jobs keep working when you leave NoFocus. Prepare and submit more songs while the PC renders them one at a time; **Queue** shows progress, pause/retry and **Save to phone** for each job. Up to eight unfinished jobs are supported. The PC uses hardware H.264 when available, with software and lossless RGB support. Interrupted transfers can be retried; a PC restart preserves the queue and restarts interrupted rendering from the uploaded files. Results remain on the PC for 24 hours after completion. An optional Windows sign-in launcher and detailed setup/testing instructions are in [desktop_export/README.md](desktop_export/README.md).
 
@@ -137,12 +149,14 @@ adb install -r app\build\outputs\apk\androidTest\debug\app-debug-androidTest.apk
 
 The script temporarily changes display size, density, rotation, and font scale, then restores their previous values in `finally`. It checks screen bounds, clipping, 48 dp controls, empty-folder and long-title states, and PC connection labels. It does not play audio or change media files, pairing codes, or volume. Android's own folder picker and full-detail dialogs may scroll when their contents require it.
 
-Native Windows sender:
+Unified Windows app:
 
 ```powershell
 dotnet run --project desktop\windows\NoFocus.Desktop\NoFocus.Desktop.csproj -c Release -- --self-test
 .\desktop\windows\build-release.ps1
 ```
+
+The release builder downloads checksum-pinned Node LTS and packages the locked export dependencies, FFmpeg, renderer and fonts inside the executable. Run `--companion-test` on the built app for isolated lifecycle verification, and `--ui-check artifacts/windows-ui` for native layout snapshots.
 
 The one-file executable is written to `artifacts/windows-x64/NoFocus Speaker.exe`. Tagged GitHub builds and manual workflow runs are defined in `.github/workflows/release.yml`.
 
@@ -159,7 +173,7 @@ The runtime test generates a one-second tone, converts all three formats with th
 
 Tool versions and SHA-256 checksums live in `download-tools.json`. Updating the Android runtime version or yt-dlp hash automatically selects a new private extraction directory. Review upstream license/source changes at the same time; notices are in [third-party/NOTICE.md](third-party/NOTICE.md). Native AARs supply only CLI payloads; the GPL Android wrapper is not linked. First builds require Maven Central and GitHub access. These apps do not use Visual-Music-Lyrics's server, authentication, cookies or secrets.
 
-The Python sender in `desktop_sender/` remains a developer and macOS/Linux fallback. Windows users should use the native one-click app.
+The native Windows app is the maintained desktop streamer in both directions. The obsolete standalone Python streamer has been removed; its source remains in Git history before this change (commit `1603fec`). There is no maintained macOS/Linux streaming client. Bundled Python used internally by the independent song downloader is unrelated and remains included.
 
 ## Release safety
 
@@ -167,4 +181,4 @@ The workflow labels the Android artifact as a debug APK. Before calling an Andro
 
 ## Protocol maintenance
 
-The Android, native Windows, and Python protocol implementations must change together. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.
+The Android and native Windows protocol implementations must change together. Original PC → phone v2 golden hashes remain checked on both platforms; reverse v3 adds shared hello, key-derivation, confirmation and encrypted-audio fixtures. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.

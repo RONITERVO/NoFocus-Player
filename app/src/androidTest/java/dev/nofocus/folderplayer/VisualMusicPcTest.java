@@ -23,6 +23,10 @@ final class VisualMusicPcTest {
         if (!previousJob.isEmpty() || !previousJobs.equals("[]")) throw new IOException("Finish the user's pending PC job before running this test.");
         File directory = new File(context.getCacheDir(),"pc-test-" + UUID.randomUUID());directory.mkdirs();
         File input = new File(SongDownloadService.directory(context),"pc-test-" + UUID.randomUUID() + ".wav");input.getParentFile().mkdirs();
+        SharedPreferences audioPrefs = context.getSharedPreferences(PhoneAudioService.PREFS,0);
+        Map<String,?> oldAudio = audioPrefs.getAll();
+        SharedPreferences playbackPrefs = context.getSharedPreferences(PlayerService.PREFS,0);
+        String oldAudioCode = playbackPrefs.getString(WifiStreamService.PREF_PAIRING_CODE,null);
         VisualMusicLibrary library = new VisualMusicLibrary(context);VisualMusicPc client = new VisualMusicPc(library);
         DownloadRuntime runtime = new DownloadRuntime(context);runtime.prepare(message -> {});
         JSONObject song = null;Uri published = null;List<Uri> uiOutputs = new ArrayList<>();
@@ -35,12 +39,16 @@ final class VisualMusicPcTest {
             catch (Exception expected) { rejected = true; }
             if (!rejected) throw new AssertionError("Untrusted PC certificate accepted");
             client.pair(code);
+            if (!audioPrefs.getBoolean("unified",false) || !audioPrefs.getString("code","").matches("[A-Z2-7]{16}")
+                    || !playbackPrefs.getString(WifiStreamService.PREF_PAIRING_CODE,"").matches("[A-Z2-7]{16}"))
+                throw new AssertionError("One pairing did not configure both audio directions");
             byte[] samples = new byte[48000 * 8 * 2]; ByteBuffer pcm = ByteBuffer.wrap(samples).order(ByteOrder.LITTLE_ENDIAN);
             for (int n = 0; n < 48000 * 2; n++) {pcm.putFloat((float)Math.sin(n * 2 * Math.PI * 440 / 48000) * .12345678f);pcm.putFloat((float)Math.sin(n * 2 * Math.PI * 880 / 48000) * .23456789f);}
             try (RandomAccessFile wav = new RandomAccessFile(input,"rw")) {CaptureFiles.wavHeader(wav,samples.length,true);wav.write(samples);}
             song = library.importMedia(SongFileProvider.uri(context,input.getName()),runtime,message -> {});
             JSONObject options = new JSONObject().put("width",720).put("height",1280).put("fps",24).put("mode","lossless").put("audio","preserve");
             JSONObject started = client.begin(song,options,message -> {});
+            client.pair(code); // Pairing the same PC while jobs exist must retain the queue.
             // Recreate the legacy single-job preference and prove the upgrade
             // migrates its exact id/configuration into the durable queue.
             JSONArray initial = new JSONArray(prefs.getString("jobs","[]"));
@@ -116,6 +124,14 @@ final class VisualMusicPcTest {
             for (Uri output : uiOutputs) context.getContentResolver().delete(output,null,null);
             if (song != null) DownloadRuntime.removeTree(library.song(song.getString("id")));
             input.delete();DownloadRuntime.removeTree(directory);
+            SharedPreferences.Editor audioRestore=audioPrefs.edit().clear();
+            for (Map.Entry<String,?> entry:oldAudio.entrySet()) {
+                Object value=entry.getValue();if(value instanceof String)audioRestore.putString(entry.getKey(),(String)value);
+                else if(value instanceof Boolean)audioRestore.putBoolean(entry.getKey(),(Boolean)value);
+            }
+            audioRestore.commit();
+            if(oldAudioCode==null)playbackPrefs.edit().remove(WifiStreamService.PREF_PAIRING_CODE).commit();
+            else playbackPrefs.edit().putString(WifiStreamService.PREF_PAIRING_CODE,oldAudioCode).commit();
             prefs.edit().putString("pair",previousPair).putString("job",previousJob).putString("jobs",previousJobs).putString("target",previousTarget).commit();
             uiPrefs.edit().putString("selected",previousSong).putString("lastExport",previousExport).putString("lastExtension",previousExtension).commit();
         }

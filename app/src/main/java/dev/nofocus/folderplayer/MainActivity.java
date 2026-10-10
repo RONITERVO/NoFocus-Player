@@ -126,7 +126,11 @@ public class MainActivity extends Activity {
         }
         receiverRegistered = true;
         refreshState();
+        if (getIntent().getBooleanExtra("pcSetup", false)) { musicMode = false; page = "setup"; getIntent().removeExtra("pcSetup"); }
         buildUi();
+        if (Build.VERSION.SDK_INT >= 29) extractionExecutor.execute(() -> {
+            try { new VisualMusicPc(new VisualMusicLibrary(getApplicationContext())).refreshConnection(); } catch (Exception ignored) { }
+        });
     }
 
     @Override protected void onPause() {
@@ -377,27 +381,21 @@ public class MainActivity extends Activity {
     }
 
     private void buildWifiSetup() {
-        LinearLayout pairing = root;
-        LinearLayout actions = root;
+        LinearLayout details = root, actions = root;
         if (isLandscape()) {
-            LinearLayout columns = row();
-            pairing = column();
-            actions = column();
-            actions.setGravity(Gravity.CENTER_VERTICAL);
-            columns.addView(pairing, new LinearLayout.LayoutParams(0, -1, 1));
-            gap(columns, 16);
-            columns.addView(actions, new LinearLayout.LayoutParams(0, -1, 1));
-            root.addView(columns, new LinearLayout.LayoutParams(-1, 0, 1));
+            LinearLayout columns=row();details=column();actions=column();
+            columns.addView(details,new LinearLayout.LayoutParams(0,-1,1));gap(columns,16);
+            columns.addView(actions,new LinearLayout.LayoutParams(0,-1,1));
+            root.addView(columns,new LinearLayout.LayoutParams(-1,0,1));
         }
-        pairing.addView(text(isLandscape() ? "Pairing code" : "Code for your PC", 16, MUTED), spaced(8));
-        TextView code = text(displayCode(), isLandscape() ? 18 : 24, INK);
-        code.setTypeface(Typeface.MONOSPACE);
-        code.setGravity(Gravity.CENTER);
-        pairing.addView(code, spaced(8));
-        if (!isLandscape()) spacer();
-        Button copy = button("Copy setup", v -> copyWifiSetup(), true);
-        actions.addView(copy, spaced(8));
-        actions.addView(button("More options", v -> showPage("options"), false), spaced(8));
+        String pc = getSharedPreferences(PhoneAudioService.PREFS,0).getString("name", "");
+        TextView paired = text(pc.isEmpty() ? "Pair once for audio + exports" : "Paired with " + pc, 20, INK);
+        paired.setMaxLines(3);paired.setEllipsize(TextUtils.TruncateAt.END);
+        details.addView(paired,spaced(8));
+        if(!isLandscape())spacer();
+        actions.addView(button("Listen on PC",v -> startActivity(new Intent(this,PhoneAudioActivity.class)),true),spaced(4));
+        actions.addView(button("Pair PC",v -> startActivity(new Intent(this,VisualMusicPairActivity.class)),false),spaced(4));
+        actions.addView(button("More options",v -> showPage("options"),false),spaced(4));
     }
 
     private void buildWifiOptions() {
@@ -412,9 +410,27 @@ public class MainActivity extends Activity {
             columns.addView(options, new LinearLayout.LayoutParams(0, -1, 1));
             root.addView(columns, new LinearLayout.LayoutParams(-1, 0, 1));
         }
-        details.addView(text("Phone address\n" + NetworkAddress.localIpv4(), 16, INK), spaced(4));
+        SharedPreferences outgoing = getSharedPreferences(PhoneAudioService.PREFS, 0);
+        boolean unified = outgoing.getBoolean("unified", false);
+        TextView manualCode = text(unified ? "Audio + exports\n" + outgoing.getString("name", "Your PC") : "Manual audio code\n" + displayCode(), 18, INK);
+        manualCode.setMaxLines(4); manualCode.setEllipsize(TextUtils.TruncateAt.END);
+        details.addView(manualCode, spaced(4));
+        options.addView(button(unified ? "Pair PC" : "Copy setup", v -> {
+            if (unified) startActivity(new Intent(this, VisualMusicPairActivity.class)); else copyWifiSetup();
+        }, false), spaced(4));
         options.addView(button("Sound quality", v -> showPage("quality"), false), spaced(4));
-        options.addView(button("New code", v -> {
+        options.addView(button(unified ? "Forget PC" : "New code", v -> {
+            if (unified) {
+                new AlertDialog.Builder(this).setTitle("Forget this PC?")
+                        .setMessage("Audio will stop and this phone will need pairing again for audio and exports.")
+                        .setNegativeButton("Cancel", null).setPositiveButton("Forget PC", (dialog, which) -> extractionExecutor.execute(() -> {
+                            try {
+                                new VisualMusicPc(new VisualMusicLibrary(getApplicationContext())).forget();
+                                runOnUiThread(() -> { if (!isDestroyed()) showPage("setup"); });
+                            } catch (Exception error) { runOnUiThread(() -> { if (!isDestroyed()) toast(error.getMessage()); }); }
+                        })).show();
+                return;
+            }
             new AlertDialog.Builder(this).setTitle("Replace pairing code?")
                     .setMessage("PC audio will stop. Enter the new code on your PC to reconnect.")
                     .setNegativeButton("Cancel", null)
