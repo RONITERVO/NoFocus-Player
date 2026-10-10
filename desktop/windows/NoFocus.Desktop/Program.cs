@@ -41,6 +41,7 @@ internal static class Program
         {
             Protocol.SelfTest();
             PhoneAudioTests.Run();
+            AppConfigTests.Run();
             SongDownload.SelfTest();
             Console.WriteLine("Protocol and downloader self-tests passed.");
             return 0;

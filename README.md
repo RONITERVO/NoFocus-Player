@@ -20,7 +20,7 @@ If Windows prompts, allow NoFocus's audio app and bundled Node runtime on your p
 
 ## Audio quality
 
-The reverse stream preserves captured **48 kHz stereo 16-bit PCM** without lossy encoding or network volume changes. It uses authenticated pairing, encrypted packets, a bounded reorder buffer, duplicate rejection and one-packet redundancy. Congested networks can still cause gaps. Android capture/mixing/resampling and the Windows mixer/output device can affect the final sound; this is not a bit-perfect copy of an app's source file.
+The reverse stream transports captured **48 kHz stereo 16-bit PCM** without lossy encoding or network volume changes. It uses authenticated pairing, encrypted packets, a bounded reorder buffer, duplicate rejection and one-packet redundancy. Windows uses adaptive sinc resampling for live playback so small capture/output clock differences do not accumulate into packet-sized skips. Transported samples and preserved export audio remain unchanged; live output follows the sound device's clock. Congested networks can still cause gaps. Android capture/mixing/resampling and the Windows mixer/output device can affect the final sound; this is not a bit-perfect copy of an app's source file.
 
 Android only captures media/game audio from apps that permit playback capture. Calls, microphone input and protected apps are not supported. No screen frames or audio files are recorded. The phone may continue playing locally, and muting phone media can also mute capture depending on the device. Android may end sharing when the screen locks; unlock and start again. Disconnection ends the phone session after five seconds. Lyrics-video capture and reverse streaming require separate sharing sessions. Starting the original PC → phone mode stops reverse streaming to prevent a feedback loop.
 
@@ -57,6 +57,7 @@ Literal zero latency is physically impossible. PC capture, Wi-Fi scheduling, And
 - Older/manual audio setup uses independently generated 80-bit codes. Its remembered Windows codes use DPAPI for the current Windows account.
 - Hello packets use HMAC-SHA-256 authentication.
 - Every PCM packet is encrypted and authenticated with AES-256-GCM.
+- Phone → PC v3 derives a fresh audio key from a random receiver challenge and requires proof before accepting audio. Captured sessions cannot be replayed after a timeout or listener restart. Update Android to **1.10.1** and Windows to **1.5.1** together; the earlier reverse v2 protocol is rejected. Existing pairing codes remain usable.
 - Sessions use a random 64-bit ID and monotonic packet sequence.
 - The phone locks an active session to one source, rejects replayed/duplicate frames, bounds all buffers, and times out dead sessions.
 - Discovery exchanges only an eight-byte service marker and port. It never exposes the pairing secret.
@@ -180,4 +181,4 @@ The workflow labels the Android artifact as a debug APK. Before calling an Andro
 
 ## Protocol maintenance
 
-The Android and native Windows protocol implementations must change together. Golden v2 packet hashes are checked on both platforms and were verified against the retired Python implementation. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.
+The Android and native Windows protocol implementations must change together. Original PC → phone v2 golden hashes remain checked on both platforms; reverse v3 adds shared hello, key-derivation, confirmation and encrypted-audio fixtures. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.

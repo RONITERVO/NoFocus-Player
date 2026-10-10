@@ -68,6 +68,7 @@ public final class PhoneAudioService extends Service {
         android.os.Process.setThreadPriority(android.os.Process.THREAD_PRIORITY_AUDIO);
         AudioRecord audio = null;
         DatagramSocket connection = null;
+        byte[] sessionKey = null;
         try {
             long began = SystemClock.elapsedRealtime();
             connection = new DatagramSocket();
@@ -76,15 +77,24 @@ public final class PhoneAudioService extends Service {
             connection.setSendBufferSize(16 * 1024);
             connection.connect(InetAddress.getByName(host), WifiAudioProtocol.PC_RECEIVER_PORT);
             long session = new SecureRandom().nextLong();
-            byte[] hello = WifiAudioProtocol.createHello(key, session, Build.MODEL);
+            byte[] hello = PhoneAudioProtocol.hello(key, session, Build.MODEL);
             byte[] response = new byte[64];
             long lastHello = 0, confirmed = 0;
             update("Connecting to PC…");
             while (!stopping && confirmed == 0) {
                 long now = SystemClock.elapsedRealtime();
-                if (now - began > 10_000) throw new IOException("PC did not answer. Check its listening mode, address, code and private-network firewall.");
+                if (now - began > 10_000) throw new IOException("PC did not answer. Update both apps, then check its listening mode and private-network firewall.");
                 if (now - lastHello >= 500) { sendPacket(connection, hello); lastHello = now; }
-                if (receiveAck(connection, response, key, session)) confirmed = now;
+                DatagramPacket reply = new DatagramPacket(response,response.length);
+                try {
+                    connection.receive(reply);
+                    byte[] nonce = PhoneAudioProtocol.challengeNonce(response,reply.getLength(),key,session);
+                    if (nonce != null) {
+                        if (sessionKey != null) Arrays.fill(sessionKey,(byte)0);
+                        sessionKey = PhoneAudioProtocol.sessionKey(key,session,nonce);
+                        sendPacket(connection,PhoneAudioProtocol.confirm(sessionKey,session,nonce));
+                    } else if (sessionKey != null && PhoneAudioProtocol.isAcknowledgement(response,reply.getLength(),sessionKey,session)) confirmed = now;
+                } catch (SocketTimeoutException ignored) { }
             }
             if (stopping) return;
             AudioPlaybackCaptureConfiguration capture = new AudioPlaybackCaptureConfiguration.Builder(projection)
@@ -115,13 +125,13 @@ public final class PhoneAudioService extends Service {
                 long now = SystemClock.elapsedRealtime();
                 if (now - began >= 12L * 60 * 60 * 1000) throw new IOException("12-hour session finished. Start again to reconnect.");
                 for (byte sample : pcm) if (sample != 0) { lastSound = now; break; }
-                byte[] datagram = WifiAudioProtocol.encryptAudio(key, session, sequence++, pcm);
+                byte[] datagram = PhoneAudioProtocol.audio(sessionKey, session, sequence++, pcm);
                 sendPacket(connection, datagram);
                 if (previous != null) sendPacket(connection, previous);
                 previous = datagram;
                 if (now - lastHello >= 1000) { sendPacket(connection, hello); lastHello = now; }
                 // Poll briefly, at most every 100 ms; the recorder supplies the stream clock.
-                if (sequence % 20 == 0 && receiveAck(connection, response, key, session)) confirmed = now;
+                if (sequence % 20 == 0 && receiveAck(connection, response, sessionKey, session)) confirmed = now;
                 if (now - confirmed > 5_000) throw new IOException("PC connection lost. Check Wi-Fi and start again.");
                 if (now >= nextStatus) {
                     nextStatus = now + 1000;
@@ -137,12 +147,13 @@ public final class PhoneAudioService extends Service {
             if (connection != null) connection.close();
             socket = null;
             Arrays.fill(key, (byte) 0);
+            if (sessionKey != null) Arrays.fill(sessionKey,(byte)0);
         }
     }
 
     private static boolean receiveAck(DatagramSocket connection, byte[] buffer, byte[] key, long session) throws Exception {
         DatagramPacket packet = new DatagramPacket(buffer, buffer.length);
-        try { connection.receive(packet); return WifiAudioProtocol.isAcknowledgement(buffer, packet.getLength(), key, session); }
+        try { connection.receive(packet); return PhoneAudioProtocol.isAcknowledgement(buffer, packet.getLength(), key, session); }
         catch (SocketTimeoutException ignored) { return false; }
     }
     private static void sendPacket(DatagramSocket socket, byte[] bytes) throws IOException {

@@ -7,7 +7,41 @@ import java.util.HexFormat;
 import static org.junit.Assert.*;
 
 public final class PhoneAudioProtocolTest {
-    @Test public void reverseSenderMatchesWindowsAndOriginalV2Fixtures() throws Exception {
+    @Test public void reverseV3MatchesWindowsAndRequiresFreshReceiverProof() throws Exception {
+        byte[] root = WifiAudioProtocol.keyFromPairingCode("ABCD-EFGH-JKLM-NPQR"), nonce = new byte[16];
+        for(int i=0;i<nonce.length;i++)nonce[i]=(byte)i;
+        byte[] hello = PhoneAudioProtocol.hello(root,7,"Desktop");
+        assertEquals("557bf06294946167b8804396c9f55c84f67a7e10034f5bb57897ec98e10c583a",hash(hello));
+        assertEquals(7,PhoneAudioProtocol.parseHello(hello,hello.length,root));
+        byte[] challenge = PhoneAudioProtocol.challenge(root,7,nonce);
+        assertArrayEquals(nonce,PhoneAudioProtocol.challengeNonce(challenge,48,root,7));
+        assertNull(PhoneAudioProtocol.challengeNonce(challenge,48,root,8));
+        byte[] key = PhoneAudioProtocol.sessionKey(root,7,nonce);
+        assertEquals("bbe8ce2e06e5a4487da613b3fc988f93b9132d0c1ab043806667221dba014cd0",HexFormat.of().formatHex(key));
+        byte[] confirm = PhoneAudioProtocol.confirm(key,7,nonce);
+        assertEquals("661d8dcddc6255029cffd1e95df2d5804d1ac34630c63cfb6b79cce47cf2ec30",hash(confirm));
+        assertTrue(PhoneAudioProtocol.isConfirmation(confirm,48,key,7,nonce));
+        byte[] replacement = nonce.clone(); replacement[0] ^= 1;
+        byte[] nextKey = PhoneAudioProtocol.sessionKey(root,7,replacement);
+        assertFalse(PhoneAudioProtocol.isConfirmation(confirm,48,nextKey,7,replacement));
+        byte[] ready = PhoneAudioProtocol.acknowledge(key,7);
+        assertTrue(PhoneAudioProtocol.isAcknowledgement(ready,32,key,7));
+        assertFalse(PhoneAudioProtocol.isAcknowledgement(ready,32,nextKey,7));
+        byte[] pcm = new byte[960];for(int i=0;i<pcm.length;i++)pcm[i]=(byte)(i * 31);
+        byte[] audio = PhoneAudioProtocol.audio(key,7,9,pcm);
+        assertEquals("6b52630a57422bd3f55eacb482e07d77c49935bbe2caaee7b73ec8a837e40cc0",hash(audio));
+        assertArrayEquals(pcm,PhoneAudioProtocol.decryptAudio(audio,audio.length,key).pcm);
+        try {PhoneAudioProtocol.decryptAudio(audio,audio.length,nextKey);fail("old session accepted by a fresh key");}catch(GeneralSecurityException expected){}
+        challenge[47]^=1;assertNull(PhoneAudioProtocol.challengeNonce(challenge,48,root,7));
+        audio[audio.length-1]^=1;
+        try {PhoneAudioProtocol.decryptAudio(audio,audio.length,key);fail("tampered audio accepted");}catch(GeneralSecurityException expected){}
+        byte[] v2 = WifiAudioProtocol.createHello(root,7,"Old app");
+        try {PhoneAudioProtocol.parseHello(v2,v2.length,root);fail("v2 downgrade accepted");}catch(GeneralSecurityException expected){}
+    }
+    @Test(expected = GeneralSecurityException.class) public void v3NeverWrapsSequence() throws Exception {
+        PhoneAudioProtocol.audio(new byte[32],7,0x100000000L,new byte[960]);
+    }
+    @Test public void originalV2FixturesStayCompatible() throws Exception {
         byte[] key = WifiAudioProtocol.keyFromPairingCode("ABCD-EFGH-JKLM-NPQR");
         byte[] hello = WifiAudioProtocol.createHello(key, 7, "Desktop");
         assertEquals("ecafd3d9a8658ac4e47367c5ecbee76ddc9dc35e5ae63a9396a9cfc91cb3b8b9", hash(hello));

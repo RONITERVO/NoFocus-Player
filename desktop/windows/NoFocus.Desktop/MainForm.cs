@@ -91,7 +91,7 @@ internal sealed class MainForm : Form
         ComboBox buffer = new() { Width = 290, DropDownStyle = ComboBoxStyle.DropDownList };
         buffer.Items.AddRange(["Fast (10 ms)", "Balanced (20 ms)", "Steady (40 ms)"]);
         buffer.SelectedIndex = config.ReceiverBufferPackets <= 2 ? 0 : config.ReceiverBufferPackets >= 8 ? 2 : 1;
-        buffer.SelectedIndexChanged += (_, _) => { config.ReceiverBufferPackets = new[] { 2, 4, 8 }[buffer.SelectedIndex]; config.Save(); audioStatus.Text = "Buffer saved. Applies next time you start listening."; }; options.Controls.Add(buffer);
+        buffer.SelectedIndexChanged += (_, _) => { config.ReceiverBufferPackets = new[] { 2, 4, 8 }[buffer.SelectedIndex]; AppConfig.SaveReceiverBuffer(config.ReceiverBufferPackets); audioStatus.Text = "Buffer saved. Applies next time you start listening."; }; options.Controls.Add(buffer);
         Button legacy = Button("Older phone app / manual setup…"); legacy.Click += (_, _) => {
             sender.Stop(); receiver.Stop(); using LegacySenderForm form = new(); form.ShowDialog(this); }; options.Controls.Add(legacy);
         options.Controls.Add(Label("Audio capture needs Android’s sharing approval each time.\nFinished exports are kept for 24 hours; save videos you want to keep.", 11));

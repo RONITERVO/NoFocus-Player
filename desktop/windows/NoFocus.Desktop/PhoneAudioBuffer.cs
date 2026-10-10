@@ -13,6 +13,11 @@ internal sealed class PhoneAudioBuffer(int targetPackets) : IWaveProvider
     private int offset;
     private bool primed;
     private long received, missing, trimmed, nonSilent;
+    private long generation;
+    internal object SyncRoot => gate;
+    internal int TargetFrames => target * Protocol.FramesPerPacket;
+    internal int BufferedFrames { get { lock (gate) return packets.Count * Protocol.FramesPerPacket + (current == null ? 0 : (current.Length - offset) / 4); } }
+    internal long Generation { get { lock (gate) return generation; } }
     public WaveFormat WaveFormat { get; } = new(Protocol.SampleRate, 16, Protocol.Channels);
     internal long Received { get { lock (gate) return received; } }
     internal long Missing { get { lock (gate) return missing; } }
@@ -22,7 +27,7 @@ internal sealed class PhoneAudioBuffer(int targetPackets) : IWaveProvider
 
     internal void Reset()
     {
-        lock (gate) { packets.Clear(); expected = -1; current = null; offset = 0; primed = false; }
+        lock (gate) { packets.Clear(); expected = -1; current = null; offset = 0; primed = false; generation++; }
     }
 
     internal bool Offer(uint sequence, byte[] pcm)
@@ -36,6 +41,7 @@ internal sealed class PhoneAudioBuffer(int targetPackets) : IWaveProvider
             if (sequence - expected > 24)
             {
                 trimmed += sequence - expected;
+                generation++;
                 packets.Clear(); current = null; offset = 0; primed = false; expected = sequence;
             }
             packets.Add(sequence, pcm); received++;
@@ -44,6 +50,7 @@ internal sealed class PhoneAudioBuffer(int targetPackets) : IWaveProvider
             {
                 long next = packets.Keys.Last() - target + 1;
                 trimmed += next - expected;
+                generation++;
                 foreach (long old in packets.Keys.TakeWhile(value => value < next).ToArray()) packets.Remove(old);
                 expected = next;
             }

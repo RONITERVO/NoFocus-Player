@@ -56,19 +56,31 @@ final class PhoneAudioRuntimeTest {
             socket.setSoTimeout(250);
             Thread receiver = new Thread(() -> {
                 long activeSession = 0, lastSequence = -1;
+                byte[] nonce = null, sessionKey = null;
+                boolean confirmed = false;
                 byte[] bytes = new byte[4096];
                 while (receiving.get()) {
                     DatagramPacket packet = new DatagramPacket(bytes, bytes.length);
                     try {
                         socket.receive(packet);
                         if (packet.getLength() == 64) {
-                            activeSession = WifiAudioProtocol.parseHello(bytes, packet.getLength(), key).sessionId;
+                            long proposed = PhoneAudioProtocol.parseHello(bytes, packet.getLength(), key);
+                            if(nonce == null || proposed != activeSession) {
+                                activeSession=proposed;nonce=new byte[16];new java.security.SecureRandom().nextBytes(nonce);
+                                sessionKey=PhoneAudioProtocol.sessionKey(key,activeSession,nonce);confirmed=false;
+                            }
                             if (acknowledge.get()) {
-                                byte[] ack = WifiAudioProtocol.helloAcknowledgement(activeSession, key);
+                                byte[] ack = confirmed ? PhoneAudioProtocol.acknowledge(sessionKey,activeSession) : PhoneAudioProtocol.challenge(key,activeSession,nonce);
                                 socket.send(new DatagramPacket(ack, ack.length, packet.getAddress(), packet.getPort()));
                             }
-                        } else {
-                            WifiAudioProtocol.AudioPacket audio = WifiAudioProtocol.decryptAudio(bytes, packet.getLength(), key);
+                        } else if (packet.getLength() == 48 && sessionKey != null && PhoneAudioProtocol.isConfirmation(bytes,packet.getLength(),sessionKey,activeSession,nonce)) {
+                            confirmed=true;
+                            if(acknowledge.get()) {
+                                byte[] ack=PhoneAudioProtocol.acknowledge(sessionKey,activeSession);
+                                socket.send(new DatagramPacket(ack,ack.length,packet.getAddress(),packet.getPort()));
+                            }
+                        } else if(confirmed) {
+                            WifiAudioProtocol.AudioPacket audio = PhoneAudioProtocol.decryptAudio(bytes, packet.getLength(), sessionKey);
                             if (audio.sessionId != activeSession || audio.sequence <= lastSequence) continue;
                             lastSequence = audio.sequence; frames.incrementAndGet();
                             for (byte sample : audio.pcm) if (sample != 0) { sounding.incrementAndGet(); break; }

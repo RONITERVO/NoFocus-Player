@@ -49,6 +49,15 @@ test('unified pairing persists both directions, uses observed addresses and prot
     assert.ok(localIpv4('192.168.1.255'));assert.ok(!localIpv4('8.8.8.8'));assert.ok(!localIpv4('10.300.2.3'));
     await app.close();app = await start({state,port:0,host:'127.0.0.1'});pair = app.pairing('127.0.0.1');
     assert.deepEqual((await request(pair,'GET','/v1/desktop')).json(),desktop);
+    await app.close();app = null;
+    await fsp.unlink(path.join(state,'identity.json'));
+    app = await start({state,port:0,host:'127.0.0.1'});pair = app.pairing('127.0.0.1');
+    const rotated = (await request(pair,'GET','/v1/desktop')).json();
+    assert.equal(rotated.phone,null,'revoking the identity must forget the old phone');
+    assert.notDeepEqual(rotated.audio,audio);
+    await request(pair,'POST','/v1/connect',details);
+    await app.close();app = await start({state,port:0,host:'127.0.0.1'});pair = app.pairing('127.0.0.1');
+    assert.equal((await request(pair,'GET','/v1/desktop')).json().phone.name,details.name,'new pairing survives restart');
   } finally {if(app)await app.close();await fsp.rm(state,{recursive:true,force:true});}
 });
 test('authenticated PC rendering, exact audio/RGB, hardware parity, queue recovery and cancellation', {timeout:180000}, async t => {

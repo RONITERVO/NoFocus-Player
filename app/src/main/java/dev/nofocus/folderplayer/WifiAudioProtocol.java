@@ -124,7 +124,7 @@ final class WifiAudioProtocol {
         return acknowledgement;
     }
 
-    // The reverse direction uses the existing v2 wire format on its own port.
+    // Retain v2 packet creation for compatibility fixtures. Reverse audio uses PhoneAudioProtocol v3.
     static byte[] createHello(byte[] key, long sessionId, String name) throws GeneralSecurityException {
         byte[] packet = new byte[HELLO_SIZE];
         ByteBuffer out = ByteBuffer.wrap(packet).order(ByteOrder.BIG_ENDIAN);

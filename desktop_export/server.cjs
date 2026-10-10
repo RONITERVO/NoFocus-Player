@@ -63,8 +63,8 @@ async function start(options = {}) {
   await fsp.mkdir(state, {recursive:true, mode:0o700});
   const jobsRoot = path.join(state, 'jobs'); await fsp.mkdir(jobsRoot, {recursive:true, mode:0o700});
   const credentials = await identity(state);
-  const desktop = await require('./desktop.cjs').desktopControl(state, credentials.token);
   const fingerprint = new crypto.X509Certificate(credentials.cert).fingerprint256.replace(/:/g,'').toLowerCase();
+  const desktop = await require('./desktop.cjs').desktopControl(state, credentials.token, fingerprint);
   const ffmpeg = options.ffmpeg || process.env.NOFOCUS_FFMPEG || require('ffmpeg-static');
   const script = (await require('esbuild').build({entryPoints:[path.join(__dirname,'renderer.ts')],bundle:true,write:false,format:'iife',target:'chrome100'})).outputFiles[0].contents;
   const jobs = new Map(); let running = null, closing = false;

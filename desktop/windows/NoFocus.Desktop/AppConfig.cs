@@ -51,12 +51,13 @@ internal sealed class AppConfig
         }
     }
 
-    internal static AppConfig Load()
+    internal static AppConfig Load(string? file = null)
     {
+        file ??= FilePath;
         try
         {
-            return File.Exists(FilePath)
-                ? JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(FilePath)) ?? new AppConfig()
+            return File.Exists(file)
+                ? JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(file)) ?? new AppConfig()
                 : new AppConfig();
         }
         catch (Exception)
@@ -65,11 +66,20 @@ internal sealed class AppConfig
         }
     }
 
-    internal void Save()
+    internal static void SaveReceiverBuffer(int packets, string? file = null)
     {
-        Directory.CreateDirectory(DirectoryPath);
-        string temporary = FilePath + ".tmp";
+        // Manual setup can save a different instance while the home window stays open.
+        AppConfig latest = Load(file);
+        latest.ReceiverBufferPackets = Math.Clamp(packets, 2, 8);
+        latest.Save(file);
+    }
+
+    internal void Save(string? file = null)
+    {
+        file ??= FilePath;
+        Directory.CreateDirectory(Path.GetDirectoryName(file)!);
+        string temporary = file + ".tmp";
         File.WriteAllText(temporary, JsonSerializer.Serialize(this, new JsonSerializerOptions { WriteIndented = true }));
-        File.Move(temporary, FilePath, true);
+        File.Move(temporary, file, true);
     }
 }
