@@ -11,8 +11,8 @@ android {
         applicationId = 'dev.nofocus.folderplayer'
         minSdk = 23
         targetSdk = 36
-        versionCode = 10
-        versionName = '1.8.0'
+        versionCode = 11
+        versionName = '1.9.0'
         resValue 'string', 'download_runtime_version', "${toolVersions.androidRuntimeVersion}-${toolVersions.androidYtDlp.sha256.substring(0, 12)}"
         testInstrumentationRunner = 'dev.nofocus.folderplayer.CompactUiTest'
     }

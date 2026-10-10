@@ -66,6 +66,7 @@ public final class CaptureService extends Service {
         getSystemService(NotificationManager.class).createNotificationChannel(
                 new NotificationChannel("capture", "Lyrics capture", NotificationManager.IMPORTANCE_LOW));
         try {
+            if (PhoneAudioService.running) throw new IOException("Stop phone audio sharing before capturing a lyrics video.");
             timing = new CaptureTiming(intent.getIntExtra("delay_seconds", 3), intent.getLongExtra("duration_millis", CaptureFiles.MAX_MILLIS));
             startForeground(NOTIFICATION, notification("Preparing capture…"), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
             Intent consent = intent.getParcelableExtra("consent");

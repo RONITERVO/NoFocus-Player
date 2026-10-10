@@ -5,9 +5,32 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        // Development/device verification. A code file avoids credentials in process arguments.
+        if (args.Contains("--receive-headless", StringComparer.OrdinalIgnoreCase))
+        {
+            try
+            {
+                string code = File.ReadAllText(ValueAfter(args, "--code-file") ?? throw new ArgumentException("--code-file is required")).Trim();
+                int duration = int.TryParse(ValueAfter(args, "--duration"), out int seconds) ? Math.Clamp(seconds, 1, 300) : 30;
+                using PhoneAudioReceiver receiver = new();
+                Exception? failure = null;
+                receiver.Failed += error => failure = error;
+                receiver.Start(code);
+                Console.WriteLine("Listening on UDP 39822 through the default Windows output.");
+                for (int i = 0; i < duration && failure == null; i++) Thread.Sleep(1000);
+                long received = receiver.Buffer!.Received, sounding = receiver.Buffer.NonSilent;
+                long gaps = receiver.Buffer.Missing, trimmed = receiver.Buffer.Trimmed;
+                receiver.Stop();
+                if (failure != null) throw failure;
+                Console.WriteLine($"Received {received} unique packets; {sounding} non-silent; {gaps} gaps; {trimmed} trimmed.");
+                return received > 200 && sounding > 100 ? 0 : 2;
+            }
+            catch (Exception error) { Console.Error.WriteLine(error.Message); return 1; }
+        }
         if (args.Contains("--self-test", StringComparer.OrdinalIgnoreCase))
         {
             Protocol.SelfTest();
+            PhoneAudioTests.Run();
             SongDownload.SelfTest();
             Console.WriteLine("Protocol and downloader self-tests passed.");
             return 0;

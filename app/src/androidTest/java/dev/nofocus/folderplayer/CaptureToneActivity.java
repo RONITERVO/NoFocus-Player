@@ -10,6 +10,7 @@ public final class CaptureToneActivity extends Activity {
     private AudioTrack track;
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
+        if (getIntent().getBooleanExtra("stop", false)) { finish(); return; }
         TextView text = new TextView(this); text.setText("NoFocus capture test\nStereo 440 / 880 Hz\nSynthetic audio only");
         text.setTextSize(28); text.setTextColor(0xffeeeeee); text.setBackgroundColor(0xff004455); text.setGravity(android.view.Gravity.CENTER);
         setContentView(text);
@@ -27,4 +28,8 @@ public final class CaptureToneActivity extends Activity {
         track.write(tone, 0, tone.length, AudioTrack.WRITE_BLOCKING); track.setLoopPoints(0, 48000, -1); track.play();
     }
     @Override public void onDestroy() { if (track != null) track.release(); super.onDestroy(); }
+    @Override protected void onNewIntent(android.content.Intent intent) {
+        super.onNewIntent(intent);
+        if (intent.getBooleanExtra("stop", false)) finish();
+    }
 }

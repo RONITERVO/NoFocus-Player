@@ -1,6 +1,6 @@
 # NoFocus Player
 
-NoFocus Player lets an Android phone play either a local music folder or encrypted PC audio without requesting audio focus. YouTube, games, and other apps can therefore keep playing at the same time.
+NoFocus Player plays local music folders and streams encrypted audio in either direction between Android and Windows. It never requests Android audio focus, so YouTube, games, and other apps can keep playing at the same time.
 
 ## Easy Wi-Fi speaker setup
 
@@ -14,6 +14,24 @@ Requirements: Windows 10/11, Android 6 or newer, and both devices on the same ho
 The PC remembers its setup and protects the pairing code with the current Windows account. On later launches, streaming is one click. If automatic discovery is blocked by a router or VPN, find the phone address under **Connect PC → More options**. **Copy setup** on the phone and **Paste phone setup** on the PC provide another easy setup route when clipboard sync is enabled.
 
 The sender captures the default PC output, never the microphone. Changing the Windows default output device while streaming may require pressing Stop and Start once.
+
+## Listen to phone audio on PC
+
+Requires Android 10+ and Windows 10/11 on the same local network.
+
+1. Open **NoFocus Speaker** on Windows, choose **Listen to phone**, then **Start listening**. It plays through the Windows default output, including connected headphones.
+2. On the phone, open **PC audio → Connect PC → Listen on PC**. Tap **Find PC** or enter an address shown in the Windows app.
+3. Enter the pairing code **from the PC**. This is separate from the code used for PC → phone.
+4. Tap **Start phone audio**, approve Android's audio/sharing permissions, then open Suno or another media app and play.
+5. Stop from either app or the phone's persistent notification. Restart after changing the Windows default output device.
+
+The PC remembers its code encrypted for your Windows account. **New pairing code** revokes the previous code when the receiver is stopped. Choose a 10, 20 (default), or 40 ms network buffer; audio quality is the same in every profile. If Windows prompts, allow NoFocus on the private network. Receiver discovery and encrypted audio use UDP **39822**; the original PC → phone direction remains on **39821**.
+
+The reverse stream preserves captured **48 kHz stereo 16-bit PCM** without lossy encoding or network volume changes. It uses authenticated pairing, encrypted packets, a bounded reorder buffer, duplicate rejection and one-packet redundancy. Congested networks can still cause gaps. Android capture/mixing/resampling and the Windows mixer/output device can affect the final sound; this is not a bit-perfect copy of an app's source file.
+
+Android only captures media/game audio from apps that permit playback capture. Calls, microphone input and protected apps are not supported. No screen frames or audio files are recorded. The phone may continue playing locally, and muting phone media can also mute capture depending on the device. Android may end sharing when the screen locks; unlock and start again. Disconnection ends the phone session after five seconds. Lyrics-video capture and reverse streaming require separate sharing sessions. Starting the original PC → phone mode stops reverse streaming to prevent a feedback loop.
+
+See [phone audio validation and protocol](docs/phone-audio.md) for verification and remaining device checks.
 
 ## Performance
 
@@ -42,7 +60,7 @@ Literal zero latency is physically impossible. PC capture, Wi-Fi scheduling, And
 
 ## Privacy and security
 
-- A random 80-bit pairing secret is generated on the phone and can be rotated.
+- Each receiver generates its own random 80-bit pairing secret, which can be rotated.
 - Windows stores the remembered secret with DPAPI for the current Windows account.
 - Hello packets use HMAC-SHA-256 authentication.
 - Every PCM packet is encrypted and authenticated with AES-256-GCM.
@@ -159,7 +177,7 @@ The runtime test generates a one-second tone, converts all three formats with th
 
 Tool versions and SHA-256 checksums live in `download-tools.json`. Updating the Android runtime version or yt-dlp hash automatically selects a new private extraction directory. Review upstream license/source changes at the same time; notices are in [third-party/NOTICE.md](third-party/NOTICE.md). Native AARs supply only CLI payloads; the GPL Android wrapper is not linked. First builds require Maven Central and GitHub access. These apps do not use Visual-Music-Lyrics's server, authentication, cookies or secrets.
 
-The Python sender in `desktop_sender/` remains a developer and macOS/Linux fallback. Windows users should use the native one-click app.
+The native Windows app is the maintained desktop streamer in both directions. The obsolete standalone Python streamer has been removed; its source remains in Git history before this change (commit `1603fec`). There is no maintained macOS/Linux streaming client. Bundled Python used internally by the independent song downloader is unrelated and remains included.
 
 ## Release safety
 
@@ -167,4 +185,4 @@ The workflow labels the Android artifact as a debug APK. Before calling an Andro
 
 ## Protocol maintenance
 
-The Android, native Windows, and Python protocol implementations must change together. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.
+The Android and native Windows protocol implementations must change together. Golden v2 packet hashes are checked on both platforms and were verified against the retired Python implementation. Any wire-format change must increment the protocol version and update self-tests/fixtures. Live audio does not request retransmission: time-diverse redundancy and one-frame concealment are preferable to adding round-trip latency.

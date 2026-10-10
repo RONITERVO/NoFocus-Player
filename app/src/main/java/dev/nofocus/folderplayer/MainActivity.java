@@ -398,6 +398,7 @@ public class MainActivity extends Activity {
         Button copy = button("Copy setup", v -> copyWifiSetup(), true);
         actions.addView(copy, spaced(8));
         actions.addView(button("More options", v -> showPage("options"), false), spaced(8));
+        actions.addView(button("Listen on PC", v -> startActivity(new Intent(this, PhoneAudioActivity.class)), false), spaced(8));
     }
 
     private void buildWifiOptions() {

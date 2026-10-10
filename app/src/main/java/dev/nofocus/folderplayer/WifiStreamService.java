@@ -113,6 +113,7 @@ public class WifiStreamService extends Service {
             return START_STICKY;
         }
         stopService(new Intent(this, VisualMusicPlayback.class));
+        stopService(new Intent(this, PhoneAudioService.class));
         startStreaming();
         return START_STICKY;
     }

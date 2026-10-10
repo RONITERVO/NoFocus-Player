@@ -106,9 +106,19 @@ internal sealed class MainForm : Form
 
         Button download = new() { Text = "Download song" };
         StyleSecondaryButton(download);
-        download.SetBounds(30, 286, 492, 44);
+        download.SetBounds(30, 286, 232, 44);
         download.Click += (_, _) => { using DownloadForm form = new(); form.ShowDialog(this); };
         card.Controls.Add(download);
+        Button receive = new() { Text = "Listen to phone" };
+        StyleSecondaryButton(receive);
+        receive.SetBounds(274, 286, 248, 44);
+        receive.Click += (_, _) =>
+        {
+            engine.Stop(); statsTimer.Stop();
+            SetStopped("PC sending stopped", "Choose a direction to start streaming.");
+            using PhoneReceiverForm form = new(config); form.ShowDialog(this);
+        };
+        card.Controls.Add(receive);
 
         Panel statusCard = NewCard(new Rectangle(38, 502, 564, 70));
         Controls.Add(statusCard);

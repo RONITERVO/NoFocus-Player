@@ -30,6 +30,21 @@ public final class CompactUiTest extends Instrumentation {
     }
 
     @Override public void onStart() {
+        if (arguments != null && "true".equals(arguments.getString("phoneAudio"))) {
+            Bundle result = new Bundle();
+            try {
+                if (arguments.containsKey("pcHost"))
+                    PhoneAudioRuntimeTest.runRemote(this, arguments.getString("pcHost"), arguments.getString("pcCode"));
+                else PhoneAudioRuntimeTest.run(this, "true".equals(arguments.getString("timeout")));
+                result.putString(REPORT_KEY_STREAMRESULT, "\nPASS: Real Android playback capture, authenticated PCM, background stream and stop/timeout cleanup.\n");
+                finish(Activity.RESULT_OK, result);
+            } catch (Throwable error) {
+                android.util.Log.e("PhoneAudioTest", "Failed", error);
+                result.putString(REPORT_KEY_STREAMRESULT, "\nFAIL: " + error + "\n");
+                finish(Activity.RESULT_CANCELED, result);
+            }
+            return;
+        }
         if (arguments != null && "true".equals(arguments.getString("pcExport"))) {
             Bundle result = new Bundle();
             try {
@@ -152,6 +167,15 @@ public final class CompactUiTest extends Instrumentation {
             } finally { downloadState.set(null, previousDownload); }
             runOnMainSync(() -> activity.finish());
             activity = main;
+            // finish() is asynchronous. Wait for MainActivity.onResume to register
+            // its state receiver before injecting playback-state broadcasts.
+            long resumedDeadline = android.os.SystemClock.elapsedRealtime() + 3000;
+            boolean[] focused = {false};
+            while (!focused[0] && android.os.SystemClock.elapsedRealtime() < resumedDeadline) {
+                onMain(() -> focused[0] = main.hasWindowFocus());
+                if (!focused[0]) android.os.SystemClock.sleep(50);
+            }
+            if (!focused[0]) throw new AssertionError("Main activity did not resume after download setup");
             click("Get video audio");
             check("Video audio");
             click("Back");
