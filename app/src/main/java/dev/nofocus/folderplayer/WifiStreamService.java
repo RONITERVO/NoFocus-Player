@@ -112,6 +112,7 @@ public class WifiStreamService extends Service {
             publishState();
             return START_STICKY;
         }
+        stopService(new Intent(this, VisualMusicPlayback.class));
         startStreaming();
         return START_STICKY;
     }

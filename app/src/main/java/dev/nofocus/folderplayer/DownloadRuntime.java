@@ -40,7 +40,12 @@ final class DownloadRuntime {
         if (child != null) child.destroy();
     }
 
-    synchronized void prepare(Progress progress) throws Exception {
+    void prepare(Progress progress) throws Exception {
+        // Capture and downloads can prepare the same private runtime concurrently.
+        synchronized (DownloadRuntime.class) { prepareLocked(progress); }
+    }
+
+    private void prepareLocked(Progress progress) throws Exception {
         if (Build.VERSION.SDK_INT < 24) throw new IOException("Song downloads need Android 7 or newer.");
         checkCancelled();
         File nativeDir = new File(context.getApplicationInfo().nativeLibraryDir);
@@ -80,6 +85,39 @@ final class DownloadRuntime {
                 "-u", "-c", launcher, new File(runtime, "yt-dlp").getAbsolutePath(),
                 "--ffmpeg-location", bin.getAbsolutePath(), "--js-runtimes", "quickjs:" + new File(nativeDir, "libqjs.so")));
         command.addAll(args);
+        return execute(command, output);
+    }
+
+    int ffmpeg(List<String> args, Progress output) throws Exception {
+        return nativeTool("ffmpeg", args, output, null);
+    }
+
+    interface InputWriter { void write(OutputStream stream) throws Exception; }
+
+    int ffmpeg(List<String> args, Progress output, InputWriter input) throws Exception {
+        return nativeTool("ffmpeg", args, output, input);
+    }
+
+    int ffprobe(List<String> args, Progress output) throws Exception {
+        return nativeTool("ffprobe", args, output, null);
+    }
+
+    private int nativeTool(String name, List<String> args, Progress output, InputWriter input) throws Exception {
+        checkCancelled();
+        File nativeDir = new File(context.getApplicationInfo().nativeLibraryDir);
+        String launcher = "import os,sys;os.setsid();print('NOFOCUS_PID:'+str(os.getpid()),flush=True);os.execv(sys.argv[1],sys.argv[1:])";
+        List<String> command = new ArrayList<>(Arrays.asList(new File(nativeDir, "libpython.so").getAbsolutePath(),
+                "-u", "-c", launcher, new File(nativeDir, "lib" + name + ".so").getAbsolutePath()));
+        command.addAll(args);
+        return execute(command, output, input);
+    }
+
+    private int execute(List<String> command, Progress output) throws Exception {
+        return execute(command, output, null);
+    }
+
+    private int execute(List<String> command, Progress output, InputWriter input) throws Exception {
+        File nativeDir = new File(context.getApplicationInfo().nativeLibraryDir);
         ProcessBuilder builder = new ProcessBuilder(command).redirectErrorStream(true);
         Map<String, String> env = builder.environment();
         env.put("PYTHONHOME", new File(runtime, "python/usr").getAbsolutePath());
@@ -93,6 +131,12 @@ final class DownloadRuntime {
         builder.directory(runtime);
         Process child = builder.start();
         process = child;
+        java.util.concurrent.atomic.AtomicReference<Exception> inputError = new java.util.concurrent.atomic.AtomicReference<>();
+        Thread writer = new Thread(() -> {
+            try (OutputStream stream = child.getOutputStream()) { if (input != null) input.write(stream); }
+            catch (Exception error) { inputError.set(error); child.destroy(); }
+        }, "native-tool-input");
+        writer.start();
         try (BufferedReader reader = new BufferedReader(new InputStreamReader(child.getInputStream(), StandardCharsets.UTF_8))) {
             String line;
             while ((line = reader.readLine()) != null) {
@@ -104,6 +148,7 @@ final class DownloadRuntime {
             }
             int code = child.waitFor();
             checkCancelled();
+            if (inputError.get() != null) throw inputError.get();
             return code;
         } catch (IOException error) {
             checkCancelled();
@@ -111,6 +156,8 @@ final class DownloadRuntime {
         } finally {
             killProcess();
             child.waitFor();
+            writer.interrupt();
+            writer.join(3000);
             process = null; group = 0;
         }
     }

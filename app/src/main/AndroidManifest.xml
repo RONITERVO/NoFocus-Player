@@ -3,6 +3,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROCESSING" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <uses-permission android:name="android.permission.RECORD_AUDIO" />
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
     <uses-permission android:name="android.permission.INTERNET" />
@@ -34,6 +38,19 @@
         </activity>
 
         <activity android:name=".SongDownloadActivity" android:exported="false" />
+        <activity android:name=".CaptureActivity" android:exported="false" />
+        <activity android:name=".VisualMusicActivity" android:exported="false" android:launchMode="singleTop" android:configChanges="orientation|screenSize|keyboardHidden" android:windowSoftInputMode="adjustResize" />
+        <activity android:name=".VisualMusicPairActivity" android:exported="true">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="nofocus-export" android:host="pair" />
+            </intent-filter>
+        </activity>
+        <service android:name=".VisualMusicPlayback" android:exported="false" android:foregroundServiceType="mediaPlayback" />
+        <service android:name=".VisualMusicWorkService" android:exported="false" android:foregroundServiceType="dataSync|mediaProcessing" />
+        <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="mediaProjection" />
         <provider android:name=".SongFileProvider" android:authorities="${applicationId}.songs"
             android:exported="false" android:grantUriPermissions="true" />
         <service android:name=".SongDownloadService" android:exported="false" android:foregroundServiceType="dataSync" />

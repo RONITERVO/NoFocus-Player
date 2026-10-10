@@ -11,8 +11,8 @@ android {
         applicationId = 'dev.nofocus.folderplayer'
         minSdk = 23
         targetSdk = 36
-        versionCode = 4
-        versionName = '1.3.0'
+        versionCode = 10
+        versionName = '1.8.0'
         resValue 'string', 'download_runtime_version', "${toolVersions.androidRuntimeVersion}-${toolVersions.androidYtDlp.sha256.substring(0, 12)}"
         testInstrumentationRunner = 'dev.nofocus.folderplayer.CompactUiTest'
     }
@@ -39,6 +39,7 @@ android {
 
 configurations { downloaderBinaries }
 dependencies {
+    implementation 'androidx.webkit:webkit:1.14.0'
     implementation 'net.lingala.zip4j:zip4j:2.11.6'
     // Extract native executables only; do not link the third-party Android wrapper.
     downloaderBinaries("io.github.junkfood02.youtubedl-android:library:${toolVersions.androidRuntimeVersion}@aar") { transitive = false }

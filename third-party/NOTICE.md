@@ -1,6 +1,8 @@
 # Download tools
 
-NoFocus launches the following command-line programs locally. Versions, download URLs and SHA-256 hashes are pinned in `download-tools.json`. No credentials or code from Visual-Music-Lyrics are included.
+NoFocus launches the following command-line programs locally. Versions, download URLs and SHA-256 hashes are pinned in `download-tools.json`. No credentials from Visual-Music-Lyrics are included.
+
+The phone visualizer includes unmodified canvas renderers, timing/parser utilities and Gemini prompt from **Visual-Music-Lyrics**, Copyright 2026 Roni Tervo, Apache-2.0 (`Visual-Music-Lyrics-LICENSE.txt`). Source provenance and SHA-256 hashes are in `visualizer/vendor`. **Caveat** and **Patrick Hand** fonts are included under their respective SIL Open Font Licenses (`OFL-Caveat.txt`, `OFL-PatrickHand.txt`). The phone interface, audio bridge and exporter integration are in this repository.
 
 * **yt-dlp 2026.08.19** — [source and release](https://github.com/yt-dlp/yt-dlp/tree/2026.08.19), Unlicense (see `yt-dlp.txt`). The Windows executable also contains third-party dependencies covered by their upstream licenses; see [yt-dlp licensing](https://github.com/yt-dlp/yt-dlp#license), including GPLv3+. The bundled EJS components are from [yt-dlp/ejs](https://github.com/yt-dlp/ejs).
 * **Android native runtimes 0.18.1** — unmodified `jni/` payloads from [JunkFood02/youtubedl-android](https://github.com/JunkFood02/youtubedl-android) Maven Central `library` and `ffmpeg` AARs. The upstream project is GPLv3 (`GPL-3.0.txt`). NoFocus does not include its wrapper classes or link its Android API. Payloads include Python, QuickJS, FFmpeg and their runtime dependencies. The native library files are executables and compressed distributions; NoFocus's Java process launcher is independently implemented.

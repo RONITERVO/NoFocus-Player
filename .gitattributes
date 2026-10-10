@@ -1,0 +1,4 @@
+# Vendored sources are verified against their original byte-level SHA-256 hashes.
+# Preserve their upstream line endings on every checkout platform.
+# Upstream whitespace is retained too; verify.cjs checks the complete contents.
+visualizer/vendor/** -text -whitespace

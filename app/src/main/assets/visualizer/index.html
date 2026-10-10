@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; connect-src 'self'; img-src 'self' data:; base-uri 'none'; form-action 'none'">
+<title>NoFocus · Visual music</title><link rel="stylesheet" href="style.css"></head>
+<body><header><button id="back" class="quiet" aria-label="Back to NoFocus">‹</button><div><b>Visual music</b><small>NoFocus</small></div><button id="queueButton" class="quiet" hidden>PC queue</button><button id="libraryButton" class="quiet">Library</button></header>
+<main>
+<p id="status" role="status" aria-live="polite"></p>
+<section id="library" class="panel"><h1>Your music, in motion.</h1><p>Capture a Suno lyrics video, add the Gemini timings, then listen or export here.</p>
+<div class="grid"><button id="capture">Capture lyrics video</button><button id="latest">Use latest capture</button></div><button id="importMedia" class="primary wide">Import audio / video</button>
+<p class="hint">Choose the lossless master MKV for the best audio. Your originals stay intact.</p><h2>Saved songs</h2><div id="songs"></div></section>
+<section id="listen" hidden><div class="songbar"><h1 id="songTitle"></h1><button id="editLyrics" class="quiet">Lyrics</button></div>
+<div id="stage" aria-label="Music and timed lyrics visualization"></div>
+<input id="seek" type="range" min="0" max="1" step="0.05" value="0" aria-label="Song position"><div class="clock"><span id="position">0:00</span><span id="duration">0:00</span></div>
+<div class="grid"><button id="play" class="primary">Play</button><button id="showExport">Export video</button></div>
+<label>Visual style<select id="theme"><option value="sketchbook">Living sketchbook</option><option value="signal-bloom">Signal bloom</option></select></label><label>Listening volume<input id="volume" type="range" min="0" max="1" step="0.01" value="1"></label><p class="hint">The same canvas renderer draws listening and export. Audio keeps playing when you leave this screen. Listening volume does not change exported audio.</p>
+</section>
+<section id="lyrics" class="panel" hidden><h1>Lyrics & timing</h1><p>Send the capture’s MP4 to Gemini with the prompt, then paste or import its final JSON.</p><div class="grid"><button id="copyPrompt">Copy Gemini prompt</button><button id="shareGemini">Share latest MP4</button></div>
+<label>Song title<input id="titleInput" maxlength="160"></label><button id="pickLyrics" class="wide">Import JSON file</button>
+<label>Gemini JSON<textarea id="jsonInput" rows="8" placeholder="Paste the complete JSON response here" spellcheck="false"></textarea></label>
+<details><summary>Reference lyrics for older Gemini responses</summary><p class="hint">Only needed when the JSON is missing language or phrase labels.</p><textarea id="guideInput" rows="5" aria-label="Reference lyrics" placeholder="Spanish line (English response)"></textarea></details>
+<p class="hint">Timings are measured from the start of the matching video. Review Gemini’s uncertain words; timings are never invented.</p><div class="grid"><button id="saveLyrics" class="primary">Save & preview</button><button id="closeLyrics">Back</button></div></section>
+<section id="export" class="panel" hidden><h1>Export visualizer video</h1>
+<div id="pcJob" hidden><p id="pcProgress"></p><button id="openQueue" class="wide">Open PC queue</button></div>
+<div id="exportOptions"><label>Export using<select id="exportTarget"><option value="auto">Automatic · use paired PC when available</option><option value="phone">This phone</option><option value="pc">Paired PC</option></select></label>
+<p id="pcInfo" class="hint"></p><details id="pairOptions"><summary>Pair PC</summary><p class="hint">Run desktop_export/start.ps1 on your PC, then scan its QR code with your camera or paste its pairing code here. Use the same Wi-Fi.</p><label>Pairing code<textarea id="pairCode" rows="3" spellcheck="false" autocomplete="off"></textarea></label><div class="grid"><button id="pairPc">Pair PC</button><button id="forgetPc">Forget PC</button></div></details>
+<label>Canvas size<select id="size"><option value="720x1280">Portrait · 720 × 1280</option><option value="1080x1920">Portrait · 1080 × 1920</option><option value="1080x1080">Square · 1080 × 1080</option><option value="1280x720">Landscape · 1280 × 720</option><option value="1920x1080">Landscape · 1920 × 1080</option></select></label>
+<label>Frame rate<select id="fps"><option>24</option><option selected>30</option><option>60</option></select></label>
+<label>Video quality<select id="videoQuality"><option value="publish">High quality H.264</option><option value="lossless">Lossless RGB · large MKV</option></select></label>
+<label>Audio quality<select id="audioQuality"><option value="preserve">Preserve original audio · no re-encoding</option><option value="aac">AAC 320 kbps · smaller, compatible</option></select></label>
+<details><summary>Phone encoding</summary><label>Encoder<select id="phoneEncoder"><option value="auto">Automatic · hardware when supported</option><option value="hardware">Hardware H.264</option><option value="software">Software H.264</option></select></label><p class="hint">Lossless RGB always uses software. High quality H.264 compresses video; preserved audio stays unchanged.</p></details>
+<p id="audioInfo" class="hint"></p><p class="hint">Keep this screen open for phone exports and transfers. Once uploaded, PC exports run independently. Videos are saved in Download/NoFocus.</p></div>
+<progress id="progress" value="0" max="1" hidden></progress><p id="exportProgress" role="status"></p>
+<details id="exportStats" hidden><summary>Export performance</summary><p id="exportStatsText" class="hint"></p></details>
+<button id="startExport" class="primary wide">Export video</button><button id="cancelExport" class="wide" hidden>Cancel export</button><button id="shareExport" class="wide">Share last export</button><button id="closeExport" class="wide quiet">Back to listening</button></section>
+<section id="queue" class="panel" hidden><h1>PC export queue</h1><p>Prepare your next song while the PC renders one video at a time. Save completed videos here.</p>
+<p id="pcConnection" role="status"></p><p id="pcEmpty">No pending PC exports.</p><div id="pcJobs"></div>
+<button id="pcCancelTransfer" class="wide" hidden>Pause transfer</button><button id="pcRefresh" class="wide">Check progress</button><button id="closeQueue" class="quiet wide">Back to library</button>
+<p class="hint">Up to 8 unfinished exports and 16 retained results. Keep this screen open while uploading or saving. Once uploaded, the PC works independently. Results are retained for 24 hours after completion. Pausing frees the PC; resuming renders again from the start using its saved upload.</p></section>
+</main><script src="app.js"></script></body></html>

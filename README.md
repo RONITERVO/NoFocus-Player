@@ -63,6 +63,33 @@ Android 11 and newer may prevent selecting the storage root or `Download` direct
 
 Starting either NoFocus source stops the other NoFocus source while unrelated apps keep playing.
 
+## Visual music on the phone
+
+Open **Visuals** in the home header. Import original audio or a captured master MKV, add the matching Gemini JSON under **Lyrics**, and preview or export with the original Visual-Music-Lyrics canvas renderer. Both Living sketchbook and Signal bloom use the desktop export composition, word timing, reactivity and fonts. Native float playback continues in the background without audio focus; listening volume does not change export audio.
+
+**Preserve original audio** copies the retained source audio without re-encoding. Non-AAC audio stays in MKV; explicit AAC 320 kbps is available for MP4 compatibility. **Lossless RGB** preserves canvas pixels, while high quality H.264 compresses video. Phone exports send binary frames and prefer hardware H.264; advanced settings can force software. Keep the screen open for phone exports and transfers. Results save in **Download/NoFocus** with a Share button.
+
+Visual music requires Android 10+, imports up to 768 MB / 20 minutes, and space for the original plus decoded playback/analysis. Removing a library song leaves original selected files and published videos intact. Font rasterization can differ between operating systems; Signal bloom uses Android's serif fallback when Georgia is unavailable. See [visualizer/README.md](visualizer/README.md) for source provenance, rebuild and pixel/audio verification. English-only intro lyrics and seek dragging are fixed for existing saved songs; JSON does not need repasting.
+
+## PC-assisted video export
+
+Run [desktop_export/start.cmd](desktop_export/start.cmd) on the PC (Node.js 22+ and Edge), scan its QR code with the phone camera, and tap **Pair PC**. Or paste its code into **Visuals / Export video / Pair PC**. The companion draws and encodes on the PC; the phone uploads original media, analysis, timings and settings once, then retrieves the finished video. Preserved audio stays untouched.
+
+**Automatic** uses the paired PC when available and the phone otherwise. **This phone** and **Paired PC** explicitly select the destination. Fully uploaded PC jobs keep working when you leave NoFocus. Prepare and submit more songs while the PC renders them one at a time; **Queue** shows progress, pause/retry and **Save to phone** for each job. Up to eight unfinished jobs are supported. The PC uses hardware H.264 when available, with software and lossless RGB support. Interrupted transfers can be retried; a PC restart preserves the queue and restarts interrupted rendering from the uploaded files. Results remain on the PC for 24 hours after completion. An optional Windows sign-in launcher and detailed setup/testing instructions are in [desktop_export/README.md](desktop_export/README.md).
+
+## Capture a Suno lyrics video
+
+Open the capture page from Visuals or Add music. Choose video size/bitrate independently of audio quality. Set a start countdown (0, 3, 5, 10 or 30 seconds) and a stop duration such as `3:30` (up to 10 minutes). A blank stop duration uses the 10-minute limit. Enable the small floating control, switch to Suno, press **Start**, and play the song during the countdown. The draggable control shows elapsed/remaining time and provides Stop/Cancel. The native timer stops recording even if the capture page is closed.
+
+Turn floating control off to use the same countdown and stop timer from the capture page. Keep the phone in one orientation and pause other media apps. Choose Suno alone in Android's sharing prompt when available; whole-screen capture can include the overlay.
+
+- **32-bit float PCM (default):** 48 kHz stereo, without another integer quantization or lossy encoder.
+- **16-bit FLAC:** smaller lossless audio at 48 kHz stereo, for devices that cannot capture float PCM.
+
+Each recording saves a lossless **MKV master** and a matching **MP4 copy** with AAC 320 kbps in **Download/NoFocus**. Keep the MKV for visualization and send the MP4 to Gemini with the app's timing prompt. Both share the encoded video and alignment. Use **Open latest master in visualizer**, paste Gemini's JSON, preview, then export with **Preserve original audio**. The same MKV and JSON can be dropped into the local Visual-Music-Lyrics desktop app.
+
+Capture requires 1 GB free space and stops after 10 minutes or when space runs low. It captures internal playback, without microphone or audio-focus requests, gain boost or normalization. Android's mixer, sample-rate conversion, device volume and Suno's capture policy still apply: lossless means preserving captured PCM, not recovering a studio original. Silence is reported when no capturable audio is detected. Device timestamps align the streams; unavailable timestamps trigger a sync-review warning. Make a short test before a full song.
+
 ## Download a song
 
 Both apps download directly from YouTube, independently. Android does not need the PC online. Downloading does not stop music playback or PC audio streaming.
