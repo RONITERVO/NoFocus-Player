@@ -7,7 +7,7 @@
     <ImplicitUsings>enable</ImplicitUsings>
     <AssemblyName>NoFocus Speaker</AssemblyName>
     <RootNamespace>NoFocus.Desktop</RootNamespace>
-    <Version>1.4.0</Version>
+    <Version>1.5.0</Version>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <PublishSingleFile>true</PublishSingleFile>
     <SelfContained>true</SelfContained>
@@ -17,6 +17,7 @@
     <DebugType>embedded</DebugType>
   </PropertyGroup>
   <ItemGroup>
+    <EmbeddedResource Include="../../../artifacts/companion.zip" LogicalName="companion.zip" Condition="Exists('../../../artifacts/companion.zip')" />
     <EmbeddedResource Include="../../../download-tools.json" LogicalName="download-tools.json" />
     <EmbeddedResource Include="../../../third-party/*" LogicalName="third-party/%(Filename)%(Extension)" />
     <PackageReference Include="NAudio" Version="2.3.0" />

@@ -5,6 +5,16 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
+        if (args.Contains("--companion-device-test"))
+        {
+            try { CompanionTests.ServeDeviceAsync(ValueAfter(args,"--companion-device-test") ?? throw new ArgumentException("Test directory required")).GetAwaiter().GetResult(); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
+        if (args.Contains("--companion-test"))
+        {
+            try { CompanionTests.RunAsync().GetAwaiter().GetResult(); return 0; }
+            catch (Exception error) { Console.Error.WriteLine(error); return 1; }
+        }
         // Development/device verification. A code file avoids credentials in process arguments.
         if (args.Contains("--receive-headless", StringComparer.OrdinalIgnoreCase))
         {
@@ -65,10 +75,22 @@ internal static class Program
         }
 
         ApplicationConfiguration.Initialize();
+        if (args.Contains("--ui-check"))
+        {
+            using MainForm check = new(true); check.CheckLayout(ValueAfter(args, "--ui-check") ?? "ui-check");
+            Console.WriteLine("Windows home, pairing and settings layouts passed."); return 0;
+        }
+        using Mutex instance = new(true, @"Local\NoFocus.Windows.App", out bool first);
+        using EventWaitHandle activate = new(false, EventResetMode.AutoReset, @"Local\NoFocus.Windows.Open");
+        if (!first) { activate.Set(); return 0; }
         Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
         Application.ThreadException += (_, eventArgs) =>
             MessageBox.Show(eventArgs.Exception.Message, "NoFocus Speaker", MessageBoxButtons.OK, MessageBoxIcon.Error);
-        Application.Run(new MainForm());
+        using MainForm form = new();
+        RegisteredWaitHandle registration = ThreadPool.RegisterWaitForSingleObject(activate, (_, _) => {
+            if (form.IsHandleCreated && !form.IsDisposed) form.BeginInvoke(form.ShowHome);
+        }, null, -1, false);
+        try { Application.Run(form); } finally { registration.Unregister(null); }
         return 0;
     }
 

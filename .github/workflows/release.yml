@@ -36,6 +36,14 @@ jobs:
         shell: pwsh
         run: .\desktop\windows\build-release.ps1
 
+      - name: Validate bundled export runtime
+        shell: pwsh
+        run: |
+          $test = Start-Process -FilePath "artifacts\windows-x64\NoFocus Speaker.exe" -ArgumentList "--companion-test" -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput "artifacts\companion-test.log" -RedirectStandardError "artifacts\companion-error.log"
+          Get-Content "artifacts\companion-test.log"
+          Get-Content "artifacts\companion-error.log"
+          if ($test.ExitCode -ne 0) { throw "Bundled export test failed: $($test.ExitCode)" }
+
       - name: Collect release files
         shell: pwsh
         run: |

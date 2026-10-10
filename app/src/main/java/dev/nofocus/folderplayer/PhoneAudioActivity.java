@@ -15,7 +15,7 @@ import java.net.*;
 import java.util.*;
 import java.util.concurrent.*;
 
-/** Separate scrollable setup page leaves the everyday playback screen compact. */
+/** Compact listening controls; pairing and technical help stay on separate pages. */
 public final class PhoneAudioActivity extends Activity {
     private final Handler main = new Handler(Looper.getMainLooper());
     private final ExecutorService discovery = Executors.newSingleThreadExecutor();
@@ -30,38 +30,28 @@ public final class PhoneAudioActivity extends Activity {
 
     @Override public void onCreate(Bundle saved) {
         super.onCreate(saved);
-        ScrollView scroll = new ScrollView(this);
-        LinearLayout body = new LinearLayout(this); body.setOrientation(LinearLayout.VERTICAL);
-        int padding = dp(16); body.setPadding(padding, padding, padding, padding);
-        body.setBackgroundColor(Color.rgb(242, 247, 245)); scroll.addView(body);
-        scroll.setOnApplyWindowInsetsListener((view, insets) -> {
-            if (Build.VERSION.SDK_INT >= 30) {
-                android.graphics.Insets safe = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
-                view.setPadding(safe.left, safe.top, safe.right, safe.bottom);
-            } else view.setPadding(insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(),
-                    insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom());
-            return insets;
-        });
-        setContentView(scroll);
-        button(body, "Back", v -> finish());
-        text(body, "Listen on PC", 26);
-        text(body, "Open NoFocus on Windows → Listen to phone → Start listening. Connect both devices to the same Wi-Fi.", 17);
+        PcPage page = new PcPage(this, "Listen on PC");
         SharedPreferences prefs = getSharedPreferences(PhoneAudioService.PREFS, 0);
-        text(body, "PC address", 17);
-        address = input(body, "192.168.1.100", InputType.TYPE_CLASS_PHONE);
+        // Manual address/code entry is a separate dialog, not everyday playback UI.
+        LinearLayout manual = new LinearLayout(this); manual.setOrientation(LinearLayout.VERTICAL); manual.setPadding(dp(16), 0, dp(16), 0);
+        text(manual, "PC address", 17); address = input(manual, "192.168.1.100", InputType.TYPE_CLASS_PHONE);
         address.setText(saved == null ? prefs.getString("host", "") : saved.getString("host", ""));
-        find = button(body, "Find PC", v -> findPc());
-        text(body, "Pairing code shown on the PC", 17);
-        code = input(body, "ABCD-EFGH-JKLM-NPQR", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
-                | InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        find = button(manual, "Find PC", v -> findPc()); text(manual, "Audio pairing code", 17);
+        code = input(manual, "ABCD-EFGH-JKLM-NPQR", InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS);
         code.setText(saved == null ? prefs.getString("code", "") : saved.getString("code", ""));
         if (saved != null) pendingConsent = saved.getBoolean("pending");
-        start = button(body, "Start phone audio", v -> requestStart());
-        stop = button(body, "Stop streaming", v -> stopService(new Intent(this, PhoneAudioService.class)));
-        status = text(body, "", 18);
-        status.setAccessibilityLiveRegion(View.ACCESSIBILITY_LIVE_REGION_POLITE);
-        text(body, "48 kHz stereo · 16-bit PCM · encrypted on your local network. No audio compression, microphone or saved recording.", 16);
-        text(body, "Android asks for sharing permission each time. Only apps that allow playback capture can be heard. The phone may still play sound locally; muting it can also mute capture on some devices. Android may stop sharing when the phone locks.", 16);
+        status = page.status;
+        start = page.button("Start phone audio", "Start", v -> requestStart());
+        stop = page.button("Stop streaming", "Stop", v -> stopService(new Intent(this, PhoneAudioService.class)));
+        page.button("Connect PC", "Connect", v -> startActivity(new Intent(this, VisualMusicPairActivity.class)));
+        page.button("More options", "Options", v -> new AlertDialog.Builder(this).setItems(prefs.getBoolean("unified", false) ? new String[]{"How it works"} : new String[]{"Manual audio setup", "How it works"}, (d, which) -> {
+            if (which == 1 || prefs.getBoolean("unified", false)) { new AlertDialog.Builder(this).setMessage("Open NoFocus on Windows and choose Listen on PC. Android asks for sharing permission each time. Only apps that allow playback capture can be heard. The phone may keep playing locally; test media volume zero. Sharing can stop when the phone locks. Audio is encrypted, uncompressed stereo; no microphone or recording.").setPositiveButton("OK", null).show(); return; }
+            if (manual.getParent() != null) ((android.view.ViewGroup) manual.getParent()).removeView(manual);
+            ScrollView scroll = new ScrollView(this); scroll.addView(manual);
+            new AlertDialog.Builder(this).setTitle("Manual audio setup").setView(scroll).setPositiveButton("Save", (dialog, w) -> {
+                prefs.edit().putString("host", address.getText().toString().trim()).putString("code", code.getText().toString().replace("-", "").trim().toUpperCase(Locale.ROOT)).apply();
+            }).setNegativeButton("Cancel", (dialog, w) -> { address.setText(prefs.getString("host", "")); code.setText(prefs.getString("code", "")); }).show();
+        }).show());
         render();
     }
 
@@ -78,9 +68,12 @@ public final class PhoneAudioActivity extends Activity {
         if (CaptureService.running) { PhoneAudioService.message = "Stop the lyrics capture first."; render(); return; }
         String host = address.getText().toString().trim();
         String pairing = code.getText().toString().replace("-", "").trim().toUpperCase(Locale.ROOT);
-        if (!validAddress(host)) { address.setError("Enter the IPv4 address shown on your PC."); return; }
-        if (!pairing.matches("[A-Z0-9]{16}")) { code.setError("Enter the 16-character code shown on the PC."); return; }
+        if (!validAddress(host)) { startActivity(new Intent(this, VisualMusicPairActivity.class)); return; }
+        if (!pairing.matches("[A-Z0-9]{16}")) { startActivity(new Intent(this, VisualMusicPairActivity.class)); return; }
         getSharedPreferences(PhoneAudioService.PREFS, 0).edit().putString("host", host).putString("code", pairing).apply();
+        if (Build.VERSION.SDK_INT >= 36 && checkSelfPermission(networkPermission()) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{networkPermission()}, 73); return;
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(Build.VERSION.SDK_INT >= 33
                     ? new String[]{Manifest.permission.RECORD_AUDIO, Manifest.permission.POST_NOTIFICATIONS}
@@ -98,6 +91,10 @@ public final class PhoneAudioActivity extends Activity {
 
     @Override public void onRequestPermissionsResult(int request, String[] permissions, int[] grants) {
         super.onRequestPermissionsResult(request, permissions, grants);
+        if (request == 73 || request == 74) {
+            if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) { if (request == 73) requestStart(); else findPc(); }
+            else { PhoneAudioService.message = "Allow nearby devices in Settings to connect to your PC."; render(); }
+        }
         if (request == 71) {
             if (grants.length > 0 && grants[0] == PackageManager.PERMISSION_GRANTED) requestStart();
             else { PhoneAudioService.message = "Audio permission is needed for internal playback capture. The microphone is never used."; render(); }
@@ -119,6 +116,9 @@ public final class PhoneAudioActivity extends Activity {
 
     private void findPc() {
         if (finding) return;
+        if (Build.VERSION.SDK_INT >= 36 && checkSelfPermission(networkPermission()) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(new String[]{networkPermission()}, 74); return;
+        }
         finding = true; find.setEnabled(false); status.setText("Looking for a listening PC…");
         discovery.execute(() -> {
             String found = null;
@@ -159,6 +159,7 @@ public final class PhoneAudioActivity extends Activity {
     private void render() {
         boolean active = PhoneAudioService.running;
         start.setEnabled(Build.VERSION.SDK_INT >= 29 && !active && !pendingConsent);
+        start.setVisibility(active ? View.GONE : View.VISIBLE); stop.setVisibility(active ? View.VISIBLE : View.GONE);
         stop.setEnabled(active); address.setEnabled(!active && !pendingConsent);
         code.setEnabled(!active && !pendingConsent); find.setEnabled(!finding && !active && !pendingConsent);
         if (!finding) status.setText(Build.VERSION.SDK_INT < 29 ? "Phone audio sharing requires Android 10 or newer." : PhoneAudioService.message);
@@ -175,7 +176,12 @@ public final class PhoneAudioActivity extends Activity {
         view.setAllCaps(false); view.setOnClickListener(action); body.addView(view, new LinearLayout.LayoutParams(-1, -2)); return view;
     }
     private int dp(int value) { return Math.round(value * getResources().getDisplayMetrics().density); }
-    @Override protected void onResume() { super.onResume(); main.post(refresh); }
+    private String networkPermission() { return Build.VERSION.SDK_INT >= 37 ? "android.permission.ACCESS_LOCAL_NETWORK" : "android.permission.NEARBY_WIFI_DEVICES"; }
+    @Override protected void onResume() {
+        super.onResume(); SharedPreferences prefs = getSharedPreferences(PhoneAudioService.PREFS, 0);
+        address.setText(prefs.getString("host", "")); code.setText(prefs.getString("code", ""));
+        main.post(refresh);
+    }
     @Override protected void onPause() { main.removeCallbacks(refresh); super.onPause(); }
     @Override protected void onSaveInstanceState(Bundle out) {
         out.putString("host", address.getText().toString()); out.putString("code", code.getText().toString());

@@ -63,6 +63,7 @@ async function start(options = {}) {
   await fsp.mkdir(state, {recursive:true, mode:0o700});
   const jobsRoot = path.join(state, 'jobs'); await fsp.mkdir(jobsRoot, {recursive:true, mode:0o700});
   const credentials = await identity(state);
+  const desktop = await require('./desktop.cjs').desktopControl(state, credentials.token);
   const fingerprint = new crypto.X509Certificate(credentials.cert).fingerprint256.replace(/:/g,'').toLowerCase();
   const ffmpeg = options.ffmpeg || process.env.NOFOCUS_FFMPEG || require('ffmpeg-static');
   const script = (await require('esbuild').build({entryPoints:[path.join(__dirname,'renderer.ts')],bundle:true,write:false,format:'iife',target:'chrome100'})).outputFiles[0].contents;
@@ -202,7 +203,24 @@ async function start(options = {}) {
     try {
       if (req.headers.origin || !equal(req.headers.authorization, 'Bearer ' + credentials.token)) fail('Pair this phone with the PC first.',401);
       const url = new URL(req.url,'https://localhost'), route = url.pathname;
-      if (req.method === 'GET' && route === '/v1/info') return json(res,{name:os.hostname(),protocol:2,rendererVersion,busy:!!running});
+      if (req.method === 'GET' && route === '/v1/info') return json(res,{name:os.hostname(),protocol:2,desktopProtocol:1,rendererVersion,busy:!!running});
+      if (req.method === 'POST' && route === '/v1/connect') {
+        try { return json(res, await desktop.connect(req, JSON.parse((await body(req, 2048)).toString('utf8')))); }
+        catch (error) { fail(error.message, 400); }
+      }
+      if (route.startsWith('/v1/desktop')) {
+        if (!['127.0.0.1','::1','::ffff:127.0.0.1'].includes(req.socket.remoteAddress)) fail('Only available on this PC.',403);
+        if (req.method === 'GET' && route === '/v1/desktop') return json(res,{phone:desktop.phone(),audio:desktop.audio});
+        if (req.method === 'GET' && route === '/v1/desktop/pairings') {
+          const available = networkAddresses().filter(require('./desktop.cjs').localIpv4);
+          const pairs = await Promise.all(available.map(async address => {
+            const code = 'nofocus-pc-v1:' + Buffer.from(JSON.stringify({...pairing(address), desktop:1})).toString('base64url');
+            const link = 'nofocus-export://pair?data=' + code.slice(14);
+            return {address,code,qr:await require('qrcode').toDataURL(link,{width:340,margin:2})};
+          }));
+          return json(res,{pairs});
+        }
+      }
       if (req.method === 'GET' && route === '/v1/jobs') return json(res,{jobs:[...jobs.values()].map(view)});
       if (req.method === 'POST' && route === '/v1/jobs') {
         const config = validate(JSON.parse((await body(req,2 * MB)).toString('utf8')));
@@ -284,7 +302,8 @@ async function start(options = {}) {
   server.requestTimeout = 15 * 60 * 1000;server.headersTimeout = 15000;server.maxConnections = 16;
   await new Promise((resolve,reject) => {server.once('error',reject);server.listen(options.port ?? Number(process.env.NOFOCUS_EXPORT_PORT || 49632),options.host || '0.0.0.0',resolve);});
   const port = server.address().port;
-  const addresses = Object.values(os.networkInterfaces()).flat().filter(item => item && item.family === 'IPv4' && !item.internal).map(item => item.address);
+  const networkAddresses = () => [...new Set(Object.values(os.networkInterfaces()).flat().filter(item => item && item.family === 'IPv4' && !item.internal).map(item => item.address))];
+  const addresses = networkAddresses();
   const pairing = host => ({version:1,name:os.hostname(),url:`https://${host}:${port}`,fingerprint,token:credentials.token});
   const timer = setInterval(() => cleanup().catch(() => {}),60000);timer.unref();pump();
   async function close() {
@@ -297,6 +316,13 @@ async function start(options = {}) {
 }
 async function main() {
   const app = await start();
+  if (process.argv.includes('--managed')) {
+    let stopping = false;
+    const stop = () => {if (!stopping) {stopping = true;void app.close().then(() => process.exit(0));}};
+    process.stdin.on('data', stop);process.stdin.on('end', stop);process.stdin.resume();
+    process.once('SIGINT',stop);process.once('SIGTERM',stop);
+    console.log('NoFocus companion ready.');return;
+  }
   const cards = [];
   for (const address of app.addresses) {
     const pairing = app.pairing(address), code = 'nofocus-pc-v1:' + Buffer.from(JSON.stringify(pairing)).toString('base64url');

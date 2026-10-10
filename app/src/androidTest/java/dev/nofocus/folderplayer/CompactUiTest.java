@@ -98,6 +98,9 @@ public final class CompactUiTest extends Instrumentation {
         Bundle result = new Bundle();
         SharedPreferences prefs = getTargetContext().getSharedPreferences(PlayerService.PREFS, 0);
         SharedPreferences downloadPrefs = getTargetContext().getSharedPreferences(SongDownloadService.PREFS, 0);
+        SharedPreferences audioPrefs = getTargetContext().getSharedPreferences(PhoneAudioService.PREFS, 0);
+        boolean hadUnified = audioPrefs.contains("unified"), originalUnified = audioPrefs.getBoolean("unified", false);
+        String originalPcName = audioPrefs.getString("name", null);
         boolean hadFormat = downloadPrefs.contains("format");
         int originalFormat = downloadPrefs.getInt("format", 0);
         boolean originalMode = prefs.getBoolean("ui_music_mode", false);
@@ -129,6 +132,9 @@ public final class CompactUiTest extends Instrumentation {
             check("PC setup");
             click("More options");
             check("PC options");
+            audioPrefs.edit().putBoolean("unified", true).putString("name", "A computer with a very long name in the living room").commit();
+            click("Back"); click("More options");
+            check("Unified PC options"); requireText("Forget PC"); requireText("Pair PC");
             click("Sound quality");
             check("Sound quality");
             click("Back");
@@ -212,12 +218,22 @@ public final class CompactUiTest extends Instrumentation {
             broadcast(waiting);
             check("Connected PC");
             requireText("Playing PC audio");
+            runOnMainSync(() -> activity.finish());
+            activity = startActivitySync(new Intent(getTargetContext(),PhoneAudioActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            check("Phone to PC controls");
+            runOnMainSync(() -> activity.finish());
+            activity = startActivitySync(new Intent(getTargetContext(),VisualMusicPairActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+            check("Unified PC pairing");
             result.putString(REPORT_KEY_STREAMRESULT, "\nPASS: " + screens + " screens; controls inside safe area, "
                     + "48dp targets, readable button labels, no scrolling, playback state labels.\n");
         } catch (Throwable error) {
             result.putString(REPORT_KEY_STREAMRESULT, "\nFAIL: " + screen + ": " + error + "\n");
             resultCode = Activity.RESULT_CANCELED;
         } finally {
+            SharedPreferences.Editor restoreAudio = audioPrefs.edit();
+            if (hadUnified) restoreAudio.putBoolean("unified", originalUnified); else restoreAudio.remove("unified");
+            if (originalPcName == null) restoreAudio.remove("name"); else restoreAudio.putString("name", originalPcName);
+            restoreAudio.commit();
             if (hadFormat) downloadPrefs.edit().putInt("format", originalFormat).commit();
             else downloadPrefs.edit().remove("format").commit();
             SharedPreferences.Editor restore = prefs.edit().putBoolean("ui_music_mode", originalMode);

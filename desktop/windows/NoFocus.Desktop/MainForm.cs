@@ -1,330 +1,257 @@
-using System.Diagnostics;
-using System.Drawing.Drawing2D;
-using System.Net;
-using System.Text.RegularExpressions;
+using System.Text.Json;
 
 namespace NoFocus.Desktop;
 
 internal sealed class MainForm : Form
 {
     private readonly AppConfig config = AppConfig.Load();
-    private readonly AudioEngine engine = new();
+    private readonly ExportCompanion companion = new();
+    private readonly AudioEngine sender = new();
+    private readonly PhoneAudioReceiver receiver = new();
     private readonly CancellationTokenSource lifetime = new();
-    private readonly TextBox addressBox = new();
-    private readonly TextBox codeBox = new();
-    private readonly Label discoveryLabel = new();
-    private readonly Label statusTitle = new();
-    private readonly Label statusDetail = new();
-    private readonly Panel statusDot = new();
-    private readonly Button startButton = new();
-    private readonly Button findButton = new();
-    private readonly System.Windows.Forms.Timer statsTimer = new() { Interval = 1000 };
-    private TimeSpan previousCpu;
-    private DateTime previousCpuTime;
+    private readonly TabControl tabs = new() { Dock = DockStyle.Fill, Padding = new Point(22, 10) };
+    private readonly Label connection = Label("Starting NoFocus…", 11), audioStatus = Label("Choose where you want to listen.", 11);
+    private readonly Label exportStatus = Label("Preparing exports…", 11), jobDetail = Label("Videos sent from your phone appear here.", 10);
+    private readonly Button toPhone = AudioButton("Listen on phone\nPC → phone"), toPc = AudioButton("Listen on PC\nPhone → PC");
+    private readonly Button pause = Button("Pause"), resume = Button("Resume"), save = Button("Save video…"), remove = Button("Remove…");
+    private readonly DataGridView jobs = new() { Dock = DockStyle.Fill, ReadOnly = true, AllowUserToAddRows = false,
+        AllowUserToDeleteRows = false, AllowUserToResizeRows = false, MultiSelect = false,
+        SelectionMode = DataGridViewSelectionMode.FullRowSelect, RowHeadersVisible = false,
+        AutoSizeColumnsMode = DataGridViewAutoSizeColumnsMode.Fill, BackgroundColor = Color.White,
+        BorderStyle = BorderStyle.None, AutoGenerateColumns = false };
+    private readonly PictureBox qr = new() { Dock = DockStyle.Fill, SizeMode = PictureBoxSizeMode.Zoom, BackColor = Color.White };
+    private readonly ComboBox networks = new() { DropDownStyle = ComboBoxStyle.DropDownList, Dock = DockStyle.Fill };
+    private readonly Label pairStatus = Label("Preparing your pairing code…", 11);
+    private readonly NotifyIcon tray = new() { Icon = SystemIcons.Application, Text = "NoFocus", Visible = true };
+    private readonly System.Windows.Forms.Timer timer = new() { Interval = 1500 };
+    private JsonElement[] pairings = [], currentJobs = [];
+    private string phoneAddress = "", sendCode = "", receiveCode = "", pairingCode = "";
+    private bool refreshing, working, exiting, closed;
+    private int reconnects;
 
-    internal MainForm()
+    internal MainForm(bool diagnostics = false)
     {
-        Text = "NoFocus PC Speaker";
-        ClientSize = new Size(640, 650);
-        MinimumSize = MaximumSize = new Size(656, 689);
-        StartPosition = FormStartPosition.CenterScreen;
-        BackColor = Color.FromArgb(244, 246, 249);
-        Font = new Font("Segoe UI", 10f);
-        AutoScaleMode = AutoScaleMode.Dpi;
-        BuildInterface();
-
-        addressBox.Text = config.PhoneAddress;
-        codeBox.Text = FormatCode(config.PairingCode);
-        engine.Failed += EngineFailed;
-        Shown += async (_, _) => await FindPhoneAsync(quiet: true);
-        FormClosing += (_, _) =>
-        {
-            lifetime.Cancel();
-            statsTimer.Stop();
-            engine.Dispose();
+        Text = "NoFocus"; ClientSize = new Size(800, 710); MinimumSize = new Size(640, 720);
+        Font = new Font("Segoe UI", 11); AutoScaleMode = AutoScaleMode.Dpi;
+        BackColor = Color.FromArgb(244, 247, 246); StartPosition = FormStartPosition.CenterScreen;
+        Build();
+        ContextMenuStrip menu = new(); menu.Items.Add("Open NoFocus", null, (_, _) => ShowHome());
+        menu.Items.Add("Quit NoFocus", null, async (_, _) => await QuitAsync()); tray.ContextMenuStrip = menu;
+        tray.DoubleClick += (_, _) => ShowHome();
+        sender.Failed += PostError; receiver.Failed += PostError;
+        timer.Tick += async (_, _) => await RefreshAsync();
+        if (!diagnostics) Shown += async (_, _) => await StartAsync();
+        else tray.Visible = false;
+        FormClosing += (_, e) => {
+            if (e.CloseReason is CloseReason.WindowsShutDown or CloseReason.TaskManagerClosing) {
+                exiting = true; lifetime.Cancel(); sender.Dispose(); receiver.Dispose(); companion.SignalStop(); tray.Visible = false;
+            } else if (!closed) { e.Cancel = true; Hide(); }
         };
-        statsTimer.Tick += UpdateStats;
     }
-
-    private void BuildInterface()
+    private void Build()
     {
-        Label title = NewLabel("NoFocus PC Speaker", 28, FontStyle.Bold, Color.FromArgb(18, 24, 32));
-        title.SetBounds(42, 30, 550, 48);
-        Controls.Add(title);
+        TableLayoutPanel shell = Column(4); shell.Padding = new Padding(22, 16, 22, 10); Controls.Add(shell);
+        Rows(shell, 2); FlowLayoutPanel header = Flow(); header.Controls.Add(Label("NoFocus", 26, true));
+        Button pair = Button("Pair phone"); pair.Click += async (_, _) => { tabs.SelectedIndex = 1; await LoadPairingsAsync(); };
+        header.Controls.Add(pair); shell.Controls.Add(header); shell.Controls.Add(connection); shell.Controls.Add(tabs);
+        shell.Controls.Add(Label("Closing this window keeps audio and exports running. Quit from Settings.", 9));
 
-        Label subtitle = NewLabel("Hear PC and phone audio together — wirelessly and privately.", 11,
-            FontStyle.Regular, Color.FromArgb(78, 87, 99));
-        subtitle.SetBounds(45, 82, 550, 28);
-        Controls.Add(subtitle);
+        TabPage home = Page("Home"), setup = Page("Pair phone"), settings = Page("Settings"); tabs.TabPages.AddRange([home, setup, settings]);
+        TableLayoutPanel body = Column(7); body.Padding = new Padding(16); home.Controls.Add(body); Rows(body, 4);
+        body.Controls.Add(Label("Where do you want to listen?", 16, true));
+        TableLayoutPanel directions = new() { Dock = DockStyle.Top, Height = 86, ColumnCount = 2 };
+        directions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50)); directions.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50));
+        directions.Controls.Add(toPhone); directions.Controls.Add(toPc); body.Controls.Add(directions);
+        toPhone.Click += (_, _) => StartAudio(false); toPc.Click += (_, _) => StartAudio(true); body.Controls.Add(audioStatus);
+        FlowLayoutPanel exportHeader = Flow(); exportHeader.Controls.Add(Label("Phone exports", 16, true)); exportHeader.Controls.Add(exportStatus); body.Controls.Add(exportHeader);
+        jobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "Song", FillWeight = 55 });
+        jobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "Status", FillWeight = 25 });
+        jobs.Columns.Add(new DataGridViewTextBoxColumn { Name = "Progress", FillWeight = 20 });
+        jobs.RowTemplate.Height = 38; jobs.ColumnHeadersHeight = 36; jobs.MinimumSize = new Size(0, 110);
+        jobs.SelectionChanged += (_, _) => UpdateActions(); body.Controls.Add(jobs);
+        FlowLayoutPanel actions = Flow(); actions.Controls.AddRange([pause, resume, save, remove]); body.Controls.Add(actions); body.Controls.Add(jobDetail);
+        pause.Click += async (_, _) => await ChangeJobAsync("pause"); resume.Click += async (_, _) => await ChangeJobAsync("start");
+        remove.Click += async (_, _) => await ChangeJobAsync("remove"); save.Click += async (_, _) => await SaveJobAsync();
 
-        Panel card = NewCard(new Rectangle(38, 128, 564, 356));
-        Controls.Add(card);
+        TableLayoutPanel pairing = Column(6); pairing.Padding = new Padding(20); setup.Controls.Add(pairing); Rows(pairing, 2);
+        pairing.Controls.Add(Label("Pair once. Audio and exports are ready.", 18, true));
+        pairing.Controls.Add(Label("Use your phone camera to scan, then tap Pair PC in NoFocus.", 11));
+        pairing.Controls.Add(qr); qr.MinimumSize = new Size(160, 160); pairing.Controls.Add(networks);
+        networks.SelectedIndexChanged += (_, _) => DisplayPairing();
+        FlowLayoutPanel pairActions = Flow(); Button copy = Button("Copy pairing code"), retry = Button("Retry connection");
+        copy.Click += (_, _) => { if (pairingCode.Length > 0) { Clipboard.SetText(pairingCode); pairStatus.Text = "On your phone: Connect PC → Pair PC → Paste code."; } };
+        retry.Click += async (_, _) => { reconnects = 0; await StartAsync(); await LoadPairingsAsync(); };
+        pairActions.Controls.AddRange([copy, retry]); pairing.Controls.Add(pairActions); pairing.Controls.Add(pairStatus);
+        tabs.SelectedIndexChanged += async (_, _) => { if (tabs.SelectedIndex == 1) await LoadPairingsAsync(); };
 
-        Label step1 = NewLabel("1   On the phone: PC audio → Start", 12, FontStyle.Bold,
-            Color.FromArgb(28, 35, 45));
-        step1.SetBounds(28, 22, 500, 30);
-        card.Controls.Add(step1);
-
-        discoveryLabel.Text = "Looking for your phone…";
-        discoveryLabel.ForeColor = Color.FromArgb(90, 99, 112);
-        discoveryLabel.SetBounds(30, 60, 340, 25);
-        card.Controls.Add(discoveryLabel);
-
-        findButton.Text = "Find phone";
-        StyleSecondaryButton(findButton);
-        findButton.SetBounds(390, 52, 132, 40);
-        findButton.Click += async (_, _) => await FindPhoneAsync(quiet: false);
-        card.Controls.Add(findButton);
-
-        Label addressLabel = NewLabel("Phone address", 9, FontStyle.Regular, Color.FromArgb(100, 109, 121));
-        addressLabel.SetBounds(30, 101, 180, 22);
-        card.Controls.Add(addressLabel);
-        StyleTextBox(addressBox);
-        addressBox.PlaceholderText = "Found automatically";
-        addressBox.SetBounds(30, 125, 492, 38);
-        card.Controls.Add(addressBox);
-
-        Label step2 = NewLabel("2   Tap Connect PC on the phone for the code", 12, FontStyle.Bold,
-            Color.FromArgb(28, 35, 45));
-        step2.SetBounds(28, 184, 500, 30);
-        card.Controls.Add(step2);
-
-        StyleTextBox(codeBox);
-        codeBox.CharacterCasing = CharacterCasing.Upper;
-        codeBox.Font = new Font("Cascadia Mono", 13f, FontStyle.Bold);
-        codeBox.PlaceholderText = "ABCD-EFGH-JKLM-NPQR";
-        codeBox.MaxLength = 19;
-        codeBox.SetBounds(30, 222, 315, 42);
-        codeBox.Leave += (_, _) => codeBox.Text = FormatCode(codeBox.Text);
-        card.Controls.Add(codeBox);
-
-        Button pasteButton = new() { Text = "Paste phone setup" };
-        StyleSecondaryButton(pasteButton);
-        pasteButton.SetBounds(360, 220, 162, 44);
-        pasteButton.Click += (_, _) => PasteSetup();
-        card.Controls.Add(pasteButton);
-
-        Button download = new() { Text = "Download song" };
-        StyleSecondaryButton(download);
-        download.SetBounds(30, 286, 232, 44);
-        download.Click += (_, _) => { using DownloadForm form = new(); form.ShowDialog(this); };
-        card.Controls.Add(download);
-        Button receive = new() { Text = "Listen to phone" };
-        StyleSecondaryButton(receive);
-        receive.SetBounds(274, 286, 248, 44);
-        receive.Click += (_, _) =>
-        {
-            engine.Stop(); statsTimer.Stop();
-            SetStopped("PC sending stopped", "Choose a direction to start streaming.");
-            using PhoneReceiverForm form = new(config); form.ShowDialog(this);
-        };
-        card.Controls.Add(receive);
-
-        Panel statusCard = NewCard(new Rectangle(38, 502, 564, 70));
-        Controls.Add(statusCard);
-        statusDot.BackColor = Color.FromArgb(150, 158, 168);
-        statusDot.SetBounds(22, 22, 18, 18);
-        statusDot.Paint += (_, eventArgs) =>
-        {
-            eventArgs.Graphics.SmoothingMode = SmoothingMode.AntiAlias;
-            using SolidBrush brush = new(statusDot.BackColor);
-            eventArgs.Graphics.FillEllipse(brush, 0, 0, 17, 17);
-        };
-        statusCard.Controls.Add(statusDot);
-        statusTitle.Text = "Ready";
-        statusTitle.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
-        statusTitle.ForeColor = Color.FromArgb(35, 42, 52);
-        statusTitle.SetBounds(52, 12, 470, 24);
-        statusCard.Controls.Add(statusTitle);
-        statusDetail.Text = "Start the receiver on your phone, then press Start.";
-        statusDetail.ForeColor = Color.FromArgb(95, 104, 116);
-        statusDetail.SetBounds(52, 37, 485, 22);
-        statusCard.Controls.Add(statusDetail);
-
-        startButton.Text = "Start listening on phone";
-        startButton.Font = new Font("Segoe UI", 13f, FontStyle.Bold);
-        startButton.ForeColor = Color.White;
-        startButton.BackColor = Color.FromArgb(26, 130, 91);
-        startButton.FlatStyle = FlatStyle.Flat;
-        startButton.FlatAppearance.BorderSize = 0;
-        startButton.Cursor = Cursors.Hand;
-        startButton.SetBounds(38, 590, 564, 54);
-        startButton.Click += (_, _) => ToggleStreaming();
-        Controls.Add(startButton);
-        AcceptButton = startButton;
+        FlowLayoutPanel options = new() { Dock = DockStyle.Fill, FlowDirection = FlowDirection.TopDown, WrapContents = false, AutoScroll = true, Padding = new Padding(20) };
+        settings.Controls.Add(options); options.Controls.Add(Label("Extras", 18, true));
+        Button download = Button("Download a song"); download.Click += (_, _) => { using DownloadForm form = new(); form.ShowDialog(this); }; options.Controls.Add(download);
+        options.Controls.Add(Label("Phone audio buffer", 11));
+        ComboBox buffer = new() { Width = 290, DropDownStyle = ComboBoxStyle.DropDownList };
+        buffer.Items.AddRange(["Fast (10 ms)", "Balanced (20 ms)", "Steady (40 ms)"]);
+        buffer.SelectedIndex = config.ReceiverBufferPackets <= 2 ? 0 : config.ReceiverBufferPackets >= 8 ? 2 : 1;
+        buffer.SelectedIndexChanged += (_, _) => { config.ReceiverBufferPackets = new[] { 2, 4, 8 }[buffer.SelectedIndex]; config.Save(); audioStatus.Text = "Buffer saved. Applies next time you start listening."; }; options.Controls.Add(buffer);
+        Button legacy = Button("Older phone app / manual setup…"); legacy.Click += (_, _) => {
+            sender.Stop(); receiver.Stop(); using LegacySenderForm form = new(); form.ShowDialog(this); }; options.Controls.Add(legacy);
+        options.Controls.Add(Label("Audio capture needs Android’s sharing approval each time.\nFinished exports are kept for 24 hours; save videos you want to keep.", 11));
+        Button quit = Button("Quit NoFocus"); quit.Click += async (_, _) => await QuitAsync(); options.Controls.Add(quit);
+        UpdateActions();
     }
-
-    private async Task FindPhoneAsync(bool quiet)
+    private async Task StartAsync()
     {
-        findButton.Enabled = false;
-        discoveryLabel.Text = "Looking for your phone…";
-        discoveryLabel.ForeColor = Color.FromArgb(90, 99, 112);
+        if (working || exiting) return; working = true; connection.Text = "Starting audio and exports…";
+        try { await companion.StartAsync(lifetime.Token); await RefreshAsync(); timer.Start(); }
+        catch (Exception error) { connection.Text = "Exports need attention"; exportStatus.Text = "Not ready"; pairStatus.Text = error.Message; tabs.SelectedIndex = 1; }
+        finally { working = false; UpdateActions(); }
+    }
+    private async Task RefreshAsync()
+    {
+        if (refreshing || exiting) return;
+        if (!companion.Ready) { if (!working && reconnects++ < 3) await StartAsync(); return; }
+        refreshing = true;
         try
         {
-            IPAddress? found = await PhoneDiscovery.FindAsync(TimeSpan.FromSeconds(4), lifetime.Token);
-            if (found != null)
+            JsonElement state = await companion.RequestAsync("GET", "/v1/desktop", lifetime.Token);
+            string nextSend = state.GetProperty("audio").GetProperty("toPhone").GetString()!, nextReceive = state.GetProperty("audio").GetProperty("toPc").GetString()!;
+            if ((sendCode.Length > 0 && sendCode != nextSend) || (receiveCode.Length > 0 && receiveCode != nextReceive)) { sender.Stop(); receiver.Stop(); }
+            sendCode = nextSend; receiveCode = nextReceive; var phone = state.GetProperty("phone");
+            phoneAddress = phone.ValueKind == JsonValueKind.Object ? phone.GetProperty("address").GetString()! : "";
+            connection.Text = phoneAddress.Length > 0 ? phone.GetProperty("name").GetString() + " paired · Audio and exports ready" : "Pair your phone to get started";
+            JsonElement queue = await companion.RequestAsync("GET", "/v1/jobs", lifetime.Token);
+            string? selected = SelectedJob()?.GetProperty("id").GetString();
+            currentJobs = queue.GetProperty("jobs").EnumerateArray().Select(j => j.Clone()).ToArray(); jobs.Rows.Clear();
+            foreach (JsonElement job in currentJobs)
             {
-                addressBox.Text = found.ToString();
-                discoveryLabel.Text = "Phone found automatically";
-                discoveryLabel.ForeColor = Color.FromArgb(26, 130, 91);
+                int frames = job.GetProperty("frames").GetInt32(), total = job.GetProperty("total").GetInt32();
+                int index = jobs.Rows.Add(job.GetProperty("title").GetString(), Status(job.GetProperty("status").GetString()!), total > 0 ? $"{frames * 100L / total}%" : "");
+                jobs.Rows[index].Tag = job;
+                if (job.GetProperty("id").GetString() == selected) jobs.Rows[index].Selected = true;
             }
-            else
+            reconnects = 0; exportStatus.Text = currentJobs.Length == 0 ? "Ready for your phone" : $"{currentJobs.Length} in your queue"; UpdateActions();
+        }
+        catch (OperationCanceledException) when (exiting) { }
+        catch (Exception error) { companion.Disconnected(); exportStatus.Text = "Reconnecting…"; connection.Text = "Exports unavailable · Retry in Pair phone"; pairStatus.Text = error.Message; }
+        finally { refreshing = false; }
+        if (sender.IsRunning) audioStatus.Text = sender.IsConfirmed ? "PC audio is playing on your phone." : "On your phone: PC audio → Start.";
+        else if (receiver.IsRunning) audioStatus.Text = receiver.IsConnected ? "Phone audio is playing through your PC." : "On your phone: Connect PC → Listen on PC → Start.";
+        toPhone.Text = sender.IsRunning ? "Stop audio\nPC → phone" : "Listen on phone\nPC → phone";
+        toPc.Text = receiver.IsRunning ? "Stop audio\nPhone → PC" : "Listen on PC\nPhone → PC";
+    }
+    private void StartAudio(bool fromPhone)
+    {
+        try
+        {
+            if ((fromPhone && receiver.IsRunning) || (!fromPhone && sender.IsRunning)) { receiver.Stop(); sender.Stop(); audioStatus.Text = "Audio stopped."; }
+            else {
+                if (phoneAddress.Length == 0 || receiveCode.Length == 0) { tabs.SelectedIndex = 1; return; }
+                sender.Stop(); receiver.Stop();
+                if (fromPhone) receiver.Start(receiveCode, config.ReceiverBufferPackets); else sender.Start(phoneAddress, sendCode);
+            }
+            _ = RefreshAsync();
+        }
+        catch (Exception error) { audioStatus.Text = error.Message; }
+    }
+    private async Task LoadPairingsAsync()
+    {
+        if (!companion.Ready || exiting) return;
+        try
+        {
+            var result = await companion.RequestAsync("GET", "/v1/desktop/pairings", lifetime.Token);
+            string previous = networks.SelectedItem?.ToString() ?? "";
+            pairings = result.GetProperty("pairs").EnumerateArray().Select(p => p.Clone()).OrderBy(p => AddressRank(p.GetProperty("address").GetString()!)).ToArray();
+            networks.Items.Clear(); foreach (var pair in pairings) networks.Items.Add(pair.GetProperty("address").GetString()!);
+            if (networks.Items.Count > 0) networks.SelectedIndex = Math.Max(0, networks.Items.IndexOf(previous));
+            else pairStatus.Text = "Connect this PC and your phone to the same home network.";
+        }
+        catch (Exception error) { pairStatus.Text = error.Message; }
+    }
+    private static int AddressRank(string address) => address.StartsWith("192.168.") ? 0 : address.StartsWith("10.") ? 1 : address.StartsWith("172.") ? 2 : 3;
+    private void DisplayPairing()
+    {
+        if (networks.SelectedIndex < 0 || networks.SelectedIndex >= pairings.Length) return;
+        var pair = pairings[networks.SelectedIndex]; pairingCode = pair.GetProperty("code").GetString()!;
+        using MemoryStream bytes = new(Convert.FromBase64String(pair.GetProperty("qr").GetString()!.Split(',')[1]));
+        using Image source = Image.FromStream(bytes); Image? previous = qr.Image; qr.Image = new Bitmap(source); previous?.Dispose();
+        pairStatus.Text = "Same home network. One scan sets up audio and video exports.";
+    }
+    private JsonElement? SelectedJob() => jobs.SelectedRows.Count > 0 && jobs.SelectedRows[0].Tag is JsonElement job ? job : null;
+    private void UpdateActions()
+    {
+        var job = SelectedJob(); string status = job?.GetProperty("status").GetString() ?? "";
+        pause.Enabled = !working && status is "queued" or "rendering"; resume.Enabled = !working && status is "paused" or "failed";
+        save.Enabled = !working && status == "complete"; remove.Enabled = !working && job.HasValue;
+        jobDetail.Text = job.HasValue && job.Value.TryGetProperty("error", out var error) && error.GetString()?.Length > 0
+            ? error.GetString() : currentJobs.Length == 0 ? "On your phone: Visuals → Export video → Automatic." : "Select a video to pause, resume or save it.";
+    }
+    private async Task ChangeJobAsync(string action)
+    {
+        var job = SelectedJob(); if (!job.HasValue || working) return;
+        if (action == "remove" && MessageBox.Show(this, "Remove this export from the PC queue? Save its video first if you want to keep it.", "Remove export", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        working = true; UpdateActions();
+        try { string route = "/v1/jobs/" + job.Value.GetProperty("id").GetString(); await companion.RequestAsync(action == "remove" ? "DELETE" : "POST", route + (action == "remove" ? "" : "/" + action), lifetime.Token); }
+        catch (Exception error) { MessageBox.Show(this, error.Message, "Export needs attention"); }
+        finally { working = false; await RefreshAsync(); }
+    }
+    private async Task SaveJobAsync()
+    {
+        var job = SelectedJob(); if (!job.HasValue || working) return;
+        string extension = job.Value.GetProperty("extension").GetString()!, title = job.Value.GetProperty("title").GetString() ?? "NoFocus video";
+        foreach (char c in Path.GetInvalidFileNameChars()) title = title.Replace(c, '_');
+        using SaveFileDialog dialog = new() { FileName = title + "." + extension, Filter = $"Video (*.{extension})|*.{extension}", OverwritePrompt = true };
+        if (dialog.ShowDialog(this) != DialogResult.OK) return;
+        working = true; UpdateActions();
+        try { await companion.SaveAsync(job.Value.GetProperty("id").GetString()!, dialog.FileName, lifetime.Token); MessageBox.Show(this, "Video saved.", "NoFocus"); }
+        catch (Exception error) { MessageBox.Show(this, error.Message, "Could not save video"); }
+        finally { working = false; UpdateActions(); }
+    }
+    private void PostError(Exception error) { if (!IsDisposed) BeginInvoke(() => { sender.Stop(); receiver.Stop(); audioStatus.Text = error.Message; }); }
+    internal void ShowHome() { Show(); WindowState = FormWindowState.Normal; Activate(); }
+    internal void CheckLayout(string directory)
+    {
+        Directory.CreateDirectory(directory);
+        StartPosition = FormStartPosition.Manual; Location = new Point(-20000, -20000); Show();
+        foreach (Size size in new[] { new Size(800, 710), new Size(640, 700) })
+        {
+            ClientSize = size;
+            for (int page = 0; page < tabs.TabPages.Count; page++)
             {
-                discoveryLabel.Text = quiet ? "Phone not found yet — manual address also works"
-                    : "Phone not found. Make sure its receiver is running.";
+                tabs.SelectedIndex = page; PerformLayout(); Application.DoEvents();
+                CheckBounds(tabs.SelectedTab!);
+                if (page == 0 && jobs.Parent is TableLayoutPanel body && body.GetRowHeights()[4] < jobs.ColumnHeadersHeight + jobs.RowTemplate.Height * 2)
+                    throw new InvalidOperationException("Export queue needs space for at least two visible rows.");
+                using Bitmap bitmap = new(Width, Height); DrawToBitmap(bitmap, new Rectangle(Point.Empty, bitmap.Size));
+                bitmap.Save(Path.Combine(directory, $"windows-{size.Width}-{page}.png"));
             }
         }
-        catch (OperationCanceledException) when (lifetime.IsCancellationRequested)
-        {
-        }
-        catch (Exception error)
-        {
-            discoveryLabel.Text = "Automatic discovery unavailable — enter the address manually";
-            if (!quiet) MessageBox.Show(error.Message, Text, MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        finally
-        {
-            if (!IsDisposed) findButton.Enabled = true;
-        }
+        closed = true; tray.Dispose(); timer.Dispose(); Close();
     }
-
-    private void PasteSetup()
+    private static void CheckBounds(Control parent)
     {
-        try
+        foreach (Control control in parent.Controls)
         {
-            string text = Clipboard.GetText();
-            Match host = Regex.Match(text, @"(?:--host[= ]+|host=)(?<value>\d{1,3}(?:\.\d{1,3}){3})",
-                RegexOptions.IgnoreCase);
-            Match code = Regex.Match(text, @"(?:--code[= ]+|code=)(?<value>[A-Z0-9-]{16,19})",
-                RegexOptions.IgnoreCase);
-            if (host.Success) addressBox.Text = host.Groups["value"].Value;
-            if (code.Success) codeBox.Text = FormatCode(code.Groups["value"].Value);
-            if (!host.Success && !code.Success)
-                MessageBox.Show("Copy the PC setup from the NoFocus phone app, then try again.", Text,
-                    MessageBoxButtons.OK, MessageBoxIcon.Information);
-        }
-        catch (Exception error)
-        {
-            MessageBox.Show("Windows could not read the clipboard: " + error.Message, Text,
-                MessageBoxButtons.OK, MessageBoxIcon.Information);
+            if (!control.Visible) continue;
+            if (control is Button && !parent.ClientRectangle.Contains(control.Bounds))
+                throw new InvalidOperationException("Clipped control: " + control.Text);
+            if (control is Button button && button.Height < 40) throw new InvalidOperationException("Small control: " + button.Text);
+            CheckBounds(control);
         }
     }
-
-    private void ToggleStreaming()
+    private async Task QuitAsync()
     {
-        if (engine.IsRunning)
-        {
-            engine.Stop();
-            statsTimer.Stop();
-            SetStopped("Stopped", "Press Start whenever you want to listen again.");
-            return;
-        }
-        try
-        {
-            string normalizedCode = Protocol.NormalizeCode(codeBox.Text);
-            engine.Start(addressBox.Text.Trim(), normalizedCode);
-            config.PhoneAddress = addressBox.Text.Trim();
-            config.PairingCode = normalizedCode;
-            config.Save();
-            codeBox.Text = FormatCode(normalizedCode);
-            startButton.Text = "Stop streaming";
-            startButton.BackColor = Color.FromArgb(194, 58, 52);
-            statusDot.Invalidate();
-            statusDot.BackColor = Color.FromArgb(232, 160, 32);
-            statusTitle.Text = "Connecting to phone";
-            statusDetail.Text = "Waiting for the phone to confirm the pairing code…";
-            previousCpu = Process.GetCurrentProcess().TotalProcessorTime;
-            previousCpuTime = DateTime.UtcNow;
-            statsTimer.Start();
-        }
-        catch (Exception error)
-        {
-            MessageBox.Show(error.Message, "Could not start", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        }
+        if (exiting) return;
+        if (currentJobs.Any(j => j.GetProperty("status").GetString() is "rendering" or "queued") && companion.OwnsProcess
+            && MessageBox.Show(this, "Quit and pause PC exports? They will restart automatically when you open NoFocus again.", "Quit NoFocus", MessageBoxButtons.OKCancel) != DialogResult.OK) return;
+        exiting = true; timer.Stop(); lifetime.Cancel(); sender.Dispose(); receiver.Dispose();
+        await companion.StopAsync(); companion.Dispose(); tray.Visible = false; tray.Dispose(); timer.Dispose();
+        qr.Image?.Dispose(); closed = true; Close();
     }
-
-    private void EngineFailed(Exception error)
-    {
-        if (IsDisposed) return;
-        BeginInvoke(() =>
-        {
-            engine.Stop();
-            statsTimer.Stop();
-            SetStopped("Connection stopped", "Press Start to reconnect after checking the PC sound device.");
-            MessageBox.Show(error.Message, "NoFocus Speaker stopped", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-        });
-    }
-
-    private void UpdateStats(object? sender, EventArgs eventArgs)
-    {
-        Process process = Process.GetCurrentProcess();
-        DateTime now = DateTime.UtcNow;
-        TimeSpan cpu = process.TotalProcessorTime;
-        double wallSeconds = Math.Max(0.001, (now - previousCpuTime).TotalSeconds);
-        double percent = (cpu - previousCpu).TotalSeconds / wallSeconds / Environment.ProcessorCount * 100;
-        previousCpu = cpu;
-        previousCpuTime = now;
-        if (engine.IsConfirmed)
-        {
-            statusDot.BackColor = Color.FromArgb(26, 180, 105);
-            statusTitle.Text = "Streaming securely";
-            statusDetail.Text = $"Encrypted 48 kHz audio  •  {engine.PacketsSent:N0} frames  •  {percent:0.0}% CPU";
-        }
-        else
-        {
-            statusDot.BackColor = Color.FromArgb(232, 160, 32);
-            statusTitle.Text = "Still connecting…";
-            statusDetail.Text = engine.PacketsSent < 800
-                ? "Waiting for the phone to confirm the pairing code."
-                : "No answer yet — check that the phone receiver and pairing code are correct.";
-        }
-        statusDot.Invalidate();
-    }
-
-    private void SetStopped(string title, string detail)
-    {
-        startButton.Text = "Start listening on phone";
-        startButton.BackColor = Color.FromArgb(26, 130, 91);
-        statusDot.BackColor = Color.FromArgb(150, 158, 168);
-        statusDot.Invalidate();
-        statusTitle.Text = title;
-        statusDetail.Text = detail;
-    }
-
-    private static string FormatCode(string value)
-    {
-        string normalized = Protocol.NormalizeCode(value);
-        if (normalized.Length != 16) return normalized;
-        return string.Join('-', Enumerable.Range(0, 4).Select(index => normalized.Substring(index * 4, 4)));
-    }
-
-    private static Label NewLabel(string text, float size, FontStyle style, Color color) => new()
-    {
-        Text = text,
-        Font = new Font("Segoe UI", size, style),
-        ForeColor = color,
-        BackColor = Color.Transparent
-    };
-
-    private static Panel NewCard(Rectangle bounds)
-    {
-        Panel panel = new() { BackColor = Color.White };
-        panel.SetBounds(bounds.X, bounds.Y, bounds.Width, bounds.Height);
-        return panel;
-    }
-
-    private static void StyleTextBox(TextBox box)
-    {
-        box.BorderStyle = BorderStyle.FixedSingle;
-        box.Font = new Font("Segoe UI", 11f);
-    }
-
-    private static void StyleSecondaryButton(Button button)
-    {
-        button.FlatStyle = FlatStyle.Flat;
-        button.FlatAppearance.BorderColor = Color.FromArgb(198, 205, 214);
-        button.BackColor = Color.White;
-        button.ForeColor = Color.FromArgb(45, 54, 66);
-        button.Cursor = Cursors.Hand;
-    }
+    private static string Status(string value) => value switch { "uploading" => "Uploading", "rendering" => "Exporting", "queued" => "Waiting", "complete" => "Ready to save", "paused" => "Paused", "failed" => "Needs attention", _ => value };
+    private static TabPage Page(string title) => new(title) { BackColor = Color.White };
+    private static TableLayoutPanel Column(int rows) => new() { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = rows };
+    private static void Rows(TableLayoutPanel panel, int fill) { for (int i = 0; i < panel.RowCount; i++) panel.RowStyles.Add(new RowStyle(i == fill ? SizeType.Percent : SizeType.AutoSize, i == fill ? 100 : 0)); }
+    private static FlowLayoutPanel Flow() => new() { Dock = DockStyle.Top, AutoSize = true, WrapContents = true, Margin = new Padding(0, 5, 0, 5) };
+    private static Label Label(string text, float size, bool bold = false) => new() { Text = text, AutoSize = true, MaximumSize = new Size(620, 0), Margin = new Padding(4, 6, 4, 8), Font = new Font("Segoe UI", size, bold ? FontStyle.Bold : FontStyle.Regular), ForeColor = Color.FromArgb(31, 52, 45) };
+    private static Button Button(string text) => new() { Text = text, AutoSize = true, MinimumSize = new Size(90, 42), Padding = new Padding(10, 3, 10, 3), FlatStyle = FlatStyle.Flat, BackColor = Color.White, Margin = new Padding(4) };
+    private static Button AudioButton(string text) => new() { Text = text, Dock = DockStyle.Fill, MinimumSize = new Size(0, 74), Margin = new Padding(4), FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(26, 130, 91), ForeColor = Color.White, Font = new Font("Segoe UI", 13, FontStyle.Bold) };
 }

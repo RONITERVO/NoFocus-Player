@@ -4,7 +4,7 @@ The native Windows app is the maintained streamer in both directions. The standa
 
 ## Protocol and audio contract
 
-Phone → PC uses the existing NFP2 version 2 wire format on UDP 39822. PC → phone remains on UDP 39821. Hello is a 64-byte HMAC-authenticated message; acknowledgement is a 32-byte authenticated reply. Discovery is eight bytes in either direction, with the responding receiver port in its final two bytes. Discovery never includes a code and is not proof of identity; the encrypted handshake verifies the independently entered pairing code.
+Phone → PC uses the existing NFP2 version 2 wire format on UDP 39822. PC → phone remains on UDP 39821. Hello is a 64-byte HMAC-authenticated message; acknowledgement is a 32-byte authenticated reply. Discovery is eight bytes in either direction, with the responding receiver port in its final two bytes. Discovery never includes a code and is not proof of identity; the encrypted handshake verifies the shared audio secret. [Unified pairing](windows-companion.md) supplies distinct secrets for both directions; manual setup still accepts independent codes.
 
 Each 1,008-byte audio datagram carries 240 frames of little-endian, signed 16-bit stereo PCM at 48 kHz, protected by AES-256-GCM. The random session ID and monotonic sequence form the nonce. The sender repeats the preceding encrypted packet to recover isolated loss. It rejects sequence overflow and caps a sharing session at 12 hours.
 
@@ -22,7 +22,7 @@ Only Android playback capture is used. No microphone source, audio focus, screen
 
 On 2026-10-10, the Honor 400 Pro passed the real Android capture test with a separate synthetic-tone app, authenticated PCM, continued streaming after leaving setup, and explicit stop/notification cleanup. An API 36 emulator also passed automatic shutdown when PC acknowledgements stopped. The real Honor → Windows Wi-Fi test used the production sender/receiver and WASAPI default output: 2,401 unique packets, 2,326 non-silent packets, 2 concealed gaps, and no stale-buffer trimming across about 12 seconds of capture (the receiver test also includes startup/shutdown). This is a connectivity/output smoke test, not an acoustic latency measurement or proof of zero packet loss.
 
-The existing compact UI regression passed all 17 screens at the emulator's normal resolution and at 320 × 480 dp in portrait/landscape with 100%, 150% and 200% text. The new streaming setup uses a separate scrollable page. Windows builds and protocol/downloader self-tests passed. Android unit tests and lint passed (zero lint errors).
+The original compact UI regression covered 17 screens. The integrated Windows companion update adds compact phone listening, pairing and unified settings coverage; see [its validation record](windows-companion.md#validation). Everyday streaming controls have no scrolling; manual input and longer help are separate dialogs. Windows builds and protocol/downloader self-tests passed. Android unit tests and lint passed (zero lint errors).
 
 Suno's current playback-capture policy, phone-volume behavior and lock-screen behavior still need checking with real listening. Existing PC → phone benchmarks in the main README are not measurements of this new reverse direction.
 
